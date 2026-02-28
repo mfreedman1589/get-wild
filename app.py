@@ -14,12 +14,10 @@ OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 # ==========================================
 # 2. CUSTOM CSS & STYLING (The UX Layer)
 # ==========================================
-# This hides the default Streamlit header and injects our custom UI
 st.set_page_config(page_title="Get Wild", page_icon="🌿", layout="centered")
 
 custom_css = """
 <style>
-    /* Custom Title Area */
     .hero-header {
         text-align: center;
         padding: 2rem 0 1rem 0;
@@ -41,8 +39,6 @@ custom_css = """
         letter-spacing: 1px;
         margin-top: 10px;
     }
-    
-    /* Sleek CTA Button */
     .take-me-there-btn {
         display: inline-block;
         background-color: #2e7d32;
@@ -61,8 +57,6 @@ custom_css = """
         background-color: #1b5e20;
         box-shadow: 0 4px 12px rgba(46, 125, 50, 0.3);
     }
-
-    /* The 'Get Wild' Special Reveal Card */
     .wild-card {
         background: linear-gradient(135deg, #f1f8e9 0%, #dcedc8 100%);
         border-left: 6px solid #558b2f;
@@ -74,12 +68,8 @@ custom_css = """
         opacity: 0;
         transform: translateY(20px);
     }
-    
     @keyframes fadeSlideUp {
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
+        to { opacity: 1; transform: translateY(0); }
     }
 </style>
 """
@@ -114,7 +104,7 @@ def fetch_local_places(lat, lng, radius_miles):
     response = requests.post(url, headers=headers, json=data)
     return response.json().get('places', [])
 
-def get_ai_recommendations(raw_places, user_filters, current_time, location_name, mode="top_3"):
+def get_ai_recommendations(raw_places, user_filters, intended_time, location_name, mode="top_3"):
     client = OpenAI(api_key=OPENAI_API_KEY)
     
     if mode == "get_wild":
@@ -127,8 +117,8 @@ def get_ai_recommendations(raw_places, user_filters, current_time, location_name
         instruction = """
         You must return EXACTLY 3 options, strictly following this architectural structure:
         1. The Crowd-Pleaser: An established, highly-rated, popular, and "safe" choice.
-        2. The Fresh Take: Something newer, trending, or event-driven (like a spot known for live music, trivia, or a modern menu).
-        3. The Hidden Gem: Something completely off the beaten path, unique, or unexpected.
+        2. The Fresh Take / Live Event: Something newer, trending, or event-driven. IF you select a music venue or stadium, explicitly state that the user needs to check tonight's specific event schedule.
+        3. The Hidden Gem (EXPERIENTIAL): This MUST be an experiential or geographically secluded destination. DO NOT just pick a restaurant with a unique menu. Pick something truly off the beaten path (e.g., a hidden speakeasy, an immersive activity, a quirky local landmark).
         
         Assign the exact category name to each option in your JSON response.
         """
@@ -138,21 +128,20 @@ def get_ai_recommendations(raw_places, user_filters, current_time, location_name
     
     CRITICAL CONTEXT:
     - Searching near: {location_name}
-    - Current local time: {current_time}
+    - The user intends to go: {intended_time}
     
-    STRICT FILTER ADHERENCE RULES (DO NOT FAIL THESE):
+    STRICT FILTER ADHERENCE RULES:
     You must ruthlessly apply the user's filters: {user_filters}
-    - IF 'Outside' is selected: The location MUST have a primary outdoor focus. If it's a restaurant, it MUST be renowned for a large patio, rooftop, or significant outdoor seating (like a brewery or winery). Do not recommend standard indoor restaurants.
-    - IF 'Outside' AND 'Food' (Full Meal/Drinks) are selected: Do NOT recommend an empty park. You must recommend a dining establishment with significant outdoor space, or a park/venue that is explicitly known for having food trucks or heavy concessions.
-    - IF 'Inside' is selected: Do not recommend parks, trails, or fully outdoor venues.
+    - IF 'Outside' is selected: The location MUST have a primary outdoor focus. 
+    - IF 'Outside' AND 'Food' are selected: Do NOT recommend an empty park. Recommend a venue with significant outdoor dining space, a rooftop, or a park explicitly known for having food trucks/concessions.
+    - IF 'Inside' is selected: Do not recommend parks or fully outdoor venues.
     
-    Using the time provided, DO NOT recommend places that are likely closed or have the wrong vibe for this time of day.
+    Using the intended time provided, DO NOT recommend places that are likely closed or have the wrong vibe for this time of day.
     
     {instruction}
     
-    Return the result STRICTLY as a JSON object with a 'recommendations' array. 
-    Each item MUST contain:
-    'name', 'category' (e.g., The Crowd-Pleaser), 'address', 'why_its_perfect' (2-sentence pitch EXPLAINING how it fits the filters and its specific category), and 'vibe_check' (3-word summary).
+    Return the result STRICTLY as a JSON object with a 'recommendations' array containing:
+    'name', 'category', 'address', 'why_its_perfect' (2-sentence pitch factoring in the time/vibe), and 'vibe_check' (3-word summary).
     """
 
     response = client.chat.completions.create(
@@ -168,7 +157,6 @@ def get_ai_recommendations(raw_places, user_filters, current_time, location_name
 # ==========================================
 # 4. STREAMLIT UI (The Frontend)
 # ==========================================
-# Custom Header Injection
 st.markdown("""
 <div class="hero-header">
     <h1 class="hero-title">Get Wild</h1>
@@ -180,18 +168,12 @@ st.write("---")
 
 # --- Filters Section ---
 st.subheader("Where are we going?")
-
-# Location Inputs
 loc_col1, loc_col2 = st.columns([5, 1])
-
 with loc_col1:
-    # Changed from 'value' to 'placeholder' for better UX
     location_input = st.text_input("Location", placeholder="Enter City or ZIP Code (e.g., Fairfax, VA)", label_visibility="collapsed")
-
 with loc_col2:
     geo_data = streamlit_geolocation()
 
-# Real-time UI feedback for GPS
 gps_active = False
 if geo_data and geo_data.get('latitude') is not None:
     gps_active = True
@@ -199,18 +181,24 @@ if geo_data and geo_data.get('latitude') is not None:
 
 st.write("---")
 st.subheader("What's the plan?")
-col1, col2 = st.columns(2)
 
-with col1:
+time_col, group_col = st.columns(2)
+with time_col:
+    intended_time = st.selectbox("When are we going?", ["Right Now", "Today (Daytime)", "Tonight", "Tomorrow Morning", "Tomorrow Night"])
+with group_col:
     group_type = st.selectbox("Who is going?", ["Date", "Family Outing", "Friends", "Solo"])
-    vibe = st.radio("Inside or Outside?", ["Doesn't Matter", "Outside", "Inside"])
 
-with col2:
-    food_pref = st.selectbox("Sustenance?", ["Full Meal", "Just Drinks/Coffee", "No Food Needed"])
+vibe_col, food_col, cost_col = st.columns(3)
+with vibe_col:
+    vibe = st.radio("Setting?", ["Doesn't Matter", "Outside", "Inside"])
+with food_col:
+    food_pref = st.radio("Sustenance?", ["Full Meal", "Just Drinks/Coffee", "No Food Needed"])
+with cost_col:
     cost = st.radio("Cost?", ["Any Price", "Free / Cheap", "Willing to Splurge"])
 
 distance = st.slider("How far are you willing to travel? (Miles)", 1, 20, 5)
-current_filters = f"{group_type}, {vibe}, {food_pref}, {cost}, within {distance} miles."
+
+current_filters = f"Group: {group_type}, Setting: {vibe}, Sustenance: {food_pref}, Cost: {cost}, Distance: within {distance} miles."
 
 # --- Action Buttons ---
 st.write("---")
@@ -218,9 +206,7 @@ btn_col1, btn_col2 = st.columns(2)
 
 with btn_col1:
     top_3_clicked = st.button("🌟 Top 3 Recommendations", use_container_width=True)
-
 with btn_col2:
-    # Added the dice back to the button text
     get_wild_clicked = st.button("🎲 GET WILD", type="primary", use_container_width=True)
 
 # ==========================================
@@ -228,6 +214,9 @@ with btn_col2:
 # ==========================================
 if top_3_clicked or get_wild_clicked:
     mode = "get_wild" if get_wild_clicked else "top_3"
+    
+    if get_wild_clicked:
+        st.balloons()
     
     if not location_input and not gps_active:
         st.warning("Please enter a location or click the GPS icon first!")
@@ -246,12 +235,12 @@ if top_3_clicked or get_wild_clicked:
                 if lat is None:
                     st.error("Couldn't find that location. Try a different ZIP code or City.")
                 else:
-                    current_time_str = datetime.now().strftime("%A, %I:%M %p")
                     raw_places = fetch_local_places(lat=lat, lng=lng, radius_miles=distance)
-                    results = get_ai_recommendations(raw_places, current_filters, current_time_str, location_context, mode=mode)
+                    
+                    # Pass intended_time instead of datetime.now()
+                    results = get_ai_recommendations(raw_places, current_filters, intended_time, location_context, mode=mode)
                     
                     if mode == "get_wild":
-                        # The Custom CSS Reveal Card for Get Wild
                         spot = results.get("recommendations", [])[0]
                         search_term = spot['name'].replace(' ', '+')
                         if not gps_active:
@@ -273,7 +262,6 @@ if top_3_clicked or get_wild_clicked:
                         st.write("### Your Handpicked Spots:")
                         for spot in results.get("recommendations", []):
                             with st.container():
-                                # Adds a sleek category label above the name
                                 st.markdown(f"<span style='color: #558b2f; font-weight: 700; text-transform: uppercase; font-size: 0.85rem; letter-spacing: 1px;'>{spot.get('category', 'Top Pick')}</span>", unsafe_allow_html=True)
                                 st.subheader(spot['name'])
                                 st.caption(f"📍 {spot['address']} | ✨ **{spot['vibe_check']}**")
