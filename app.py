@@ -2,6 +2,8 @@ import streamlit as st
 import requests
 import json
 from openai import OpenAI
+from datetime import datetime
+from streamlit_geolocation import streamlit_geolocation
 
 # ==========================================
 # 1. CONFIGURATION & SECRETS
@@ -10,15 +12,22 @@ from openai import OpenAI
 GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 
-# Set default location to Fairfax, VA area
-DEFAULT_LAT = 38.8462
-DEFAULT_LNG = -77.3064
-
 # ==========================================
 # 2. HELPER FUNCTIONS (The Engine)
 # ==========================================
-def fetch_local_places(radius_miles, vibe_keyword):
-    """Fetches raw data from Google Places API."""
+def get_coordinates(location_query):
+    """Converts a ZIP code or City into Latitude/Longitude using Google."""
+    url = f"https://maps.googleapis.com/maps/api/geocode/json?address={location_query}&key={GOOGLE_API_KEY}"
+    response = requests.get(url).json()
+    
+    if response['status'] == 'OK':
+        location = response['results'][0]['geometry']['location']
+        return location['lat'], location['lng']
+    else:
+        return None, None
+
+def fetch_local_places(lat, lng, radius_miles):
+    """Fetches raw data from Google Places API using dynamic coordinates."""
     radius_meters = int(radius_miles * 1609.34)
     url = "https://places.googleapis.com/v1/places:searchNearby"
     
@@ -28,24 +37,22 @@ def fetch_local_places(radius_miles, vibe_keyword):
         "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.types"
     }
     
-    # Translating our app filters into Google's required types
     data = {
-        "includedTypes": ["restaurant", "bar", "cafe", "park", "tourist_attraction"],
-        "maxResultCount": 15,
+        "includedTypes": ["restaurant", "bar", "cafe", "park", "tourist_attraction", "museum", "bowling_alley"],
+        "maxResultCount": 20,
         "locationRestriction": {
             "circle": {
-                "center": {"latitude": DEFAULT_LAT, "longitude": DEFAULT_LNG},
+                "center": {"latitude": lat, "longitude": lng},
                 "radius": radius_meters
             }
         }
     }
 
-    # The Real API Call
     response = requests.post(url, headers=headers, json=data)
     return response.json().get('places', [])
 
-def get_ai_recommendations(raw_places, user_filters, mode="top_3"):
-    """Sends raw places and user filters to the LLM for curation."""
+def get_ai_recommendations(raw_places, user_filters, current_time, location_name, mode="top_3"):
+    """Sends raw places, user filters, and the CURRENT TIME to the LLM."""
     client = OpenAI(api_key=OPENAI_API_KEY)
     
     if mode == "get_wild":
@@ -54,19 +61,25 @@ def get_ai_recommendations(raw_places, user_filters, mode="top_3"):
         instruction = "Select the absolute BEST 3 options that match the user's filters. Filter out tourist traps."
 
     system_prompt = f"""
-    You are the curation engine for an app called 'Get Wild'.
+    You are the expert curation engine for a local discovery app called 'Get Wild'.
+    
+    CRITICAL CONTEXT:
+    - The user is searching near: {location_name}
+    - The current local day and time is: {current_time}
+    
+    Using the time provided, DO NOT recommend places that are likely closed or have the wrong vibe for this time of day (e.g., no nightclubs at 9 AM, no breakfast cafes at 8 PM).
+    
     {instruction}
     Return the result STRICTLY as a JSON object with a 'recommendations' array containing:
-    'name', 'address', 'why_its_perfect' (2-sentence pitch), and 'vibe_check' (3-word summary).
+    'name', 'address', 'why_its_perfect' (2-sentence pitch factoring in the time/vibe), and 'vibe_check' (3-word summary).
     """
 
-    # The Real AI Call
     response = client.chat.completions.create(
         model="gpt-4o",
         response_format={ "type": "json_object" },
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"FILTERS: {user_filters}\nPLACES: {json.dumps(raw_places)}"}
+            {"role": "user", "content": f"FILTERS: {user_filters}\nAVAILABLE PLACES: {json.dumps(raw_places)}"}
         ]
     )
     return json.loads(response.choices[0].message.content)
@@ -74,12 +87,25 @@ def get_ai_recommendations(raw_places, user_filters, mode="top_3"):
 # ==========================================
 # 3. STREAMLIT UI (The Frontend)
 # ==========================================
-st.set_page_config(page_title="Get Wild", page_icon="🎲", layout="centered")
+st.set_page_config(page_title="Get Wild", page_icon="🔥", layout="centered")
 
-st.title("🎲 Get Wild")
+st.title("🔥 Get Wild")
 st.markdown("Skip the endless scrolling. Tell us your vibe, and we'll tell you where to go.")
 
 # --- Filters Section ---
+st.subheader("Where are we going?")
+
+# This splits the layout so the text box is wide and the GPS button is small
+loc_col1, loc_col2 = st.columns([5, 1])
+
+with loc_col1:
+    location_input = st.text_input("Enter City or ZIP Code", value="Fairfax, VA", label_visibility="collapsed")
+
+with loc_col2:
+    # This creates the clickable GPS crosshairs icon
+    geo_data = streamlit_geolocation()
+
+st.write("---")
 st.subheader("What's the plan?")
 col1, col2 = st.columns(2)
 
@@ -93,7 +119,6 @@ with col2:
 
 distance = st.slider("How far are you willing to travel? (Miles)", 1, 20, 5)
 
-# Combine filters into a string for the AI
 current_filters = f"{group_type}, {vibe}, {food_pref}, {cost}, within {distance} miles."
 
 # --- Action Buttons ---
@@ -104,7 +129,7 @@ with btn_col1:
     top_3_clicked = st.button("🌟 Get Top 3 Recommendations", use_container_width=True)
 
 with btn_col2:
-    get_wild_clicked = st.button("🎲 GET WILD (Roulette)", type="primary", use_container_width=True)
+    get_wild_clicked = st.button("GET WILD", type="primary", use_container_width=True)
 
 # ==========================================
 # 4. EXECUTION LOGIC
@@ -113,26 +138,45 @@ if top_3_clicked or get_wild_clicked:
     mode = "get_wild" if get_wild_clicked else "top_3"
     
     if get_wild_clicked:
-        st.snow() # Fun animation for the roulette option
+        st.balloons() 
     
-    with st.spinner("Scouting the best local spots..."):
+    with st.spinner("Scouting the best spots..."):
         try:
-            # Step 1: Fetch raw data
-            raw_places = fetch_local_places(radius_miles=distance, vibe_keyword=current_filters)
+            # Determine Location (GPS overrides text input if clicked)
+            lat, lng = None, None
+            location_context = location_input
             
-            # Step 2: Curate with AI
-            results = get_ai_recommendations(raw_places, current_filters, mode=mode)
+            if geo_data and geo_data.get('latitude') is not None and geo_data.get('longitude') is not None:
+                lat = geo_data['latitude']
+                lng = geo_data['longitude']
+                location_context = "their exact GPS coordinates"
+            elif location_input:
+                lat, lng = get_coordinates(location_input)
             
-            # Step 3: Display Results
-            st.write("### Your Handpicked Spots:" if mode == "top_3" else "### Your Spontaneous Adventure:")
-            
-            for spot in results.get("recommendations", []):
-                with st.container():
-                    st.subheader(spot['name'])
-                    st.caption(f"📍 {spot['address']} | ✨ **{spot['vibe_check']}**")
-                    st.write(spot['why_its_perfect'])
-                    st.markdown("[Take me there!](https://maps.google.com/?q=" + spot['name'].replace(" ", "+") + ")")
-                    st.write("---")
-                    
+            if lat is None:
+                st.error("Couldn't find that location. Try a different ZIP code or click the GPS icon.")
+            else:
+                current_time_str = datetime.now().strftime("%A, %I:%M %p")
+                
+                raw_places = fetch_local_places(lat=lat, lng=lng, radius_miles=distance)
+                results = get_ai_recommendations(raw_places, current_filters, current_time_str, location_context, mode=mode)
+                
+                st.write("### Your Handpicked Spots:" if mode == "top_3" else "### Your Spontaneous Adventure:")
+                
+                for spot in results.get("recommendations", []):
+                    with st.container():
+                        st.subheader(spot['name'])
+                        st.caption(f"📍 {spot['address']} | ✨ **{spot['vibe_check']}**")
+                        st.write(spot['why_its_perfect'])
+                        
+                        # Build Maps URL
+                        search_term = spot['name'].replace(' ', '+')
+                        if not (geo_data and geo_data.get('latitude')):
+                            search_term += f"+{location_input.replace(' ', '+')}"
+                            
+                        map_url = f"https://www.google.com/maps/search/?api=1&query={search_term}"
+                        st.markdown(f"[Take me there!]({map_url})")
+                        st.write("---")
+                        
         except Exception as e:
             st.error(f"Whoops! Something went wrong out in the wild: {e}")
