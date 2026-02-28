@@ -118,9 +118,20 @@ def get_ai_recommendations(raw_places, user_filters, current_time, location_name
     client = OpenAI(api_key=OPENAI_API_KEY)
     
     if mode == "get_wild":
-        instruction = "Select EXACTLY ONE highly-rated option that fits the criteria for a spontaneous adventure."
+        instruction = """
+        Select EXACTLY ONE highly-rated option that fits the criteria for a spontaneous adventure.
+        Make it something unexpected but perfectly matched to the user's filters.
+        Assign it the category: "Spontaneous Adventure".
+        """
     else:
-        instruction = "Select the absolute BEST 3 options that match the user's filters. Filter out tourist traps."
+        instruction = """
+        You must return EXACTLY 3 options, strictly following this architectural structure:
+        1. The Crowd-Pleaser: An established, highly-rated, popular, and "safe" choice.
+        2. The Fresh Take: Something newer, trending, or event-driven (like a spot known for live music, trivia, or a modern menu).
+        3. The Hidden Gem: Something completely off the beaten path, unique, or unexpected.
+        
+        Assign the exact category name to each option in your JSON response.
+        """
 
     system_prompt = f"""
     You are the expert curation engine for a local discovery app called 'Get Wild'.
@@ -129,11 +140,19 @@ def get_ai_recommendations(raw_places, user_filters, current_time, location_name
     - Searching near: {location_name}
     - Current local time: {current_time}
     
+    STRICT FILTER ADHERENCE RULES (DO NOT FAIL THESE):
+    You must ruthlessly apply the user's filters: {user_filters}
+    - IF 'Outside' is selected: The location MUST have a primary outdoor focus. If it's a restaurant, it MUST be renowned for a large patio, rooftop, or significant outdoor seating (like a brewery or winery). Do not recommend standard indoor restaurants.
+    - IF 'Outside' AND 'Food' (Full Meal/Drinks) are selected: Do NOT recommend an empty park. You must recommend a dining establishment with significant outdoor space, or a park/venue that is explicitly known for having food trucks or heavy concessions.
+    - IF 'Inside' is selected: Do not recommend parks, trails, or fully outdoor venues.
+    
     Using the time provided, DO NOT recommend places that are likely closed or have the wrong vibe for this time of day.
     
     {instruction}
-    Return the result STRICTLY as a JSON object with a 'recommendations' array containing:
-    'name', 'address', 'why_its_perfect' (2-sentence pitch factoring in the time/vibe), and 'vibe_check' (3-word summary).
+    
+    Return the result STRICTLY as a JSON object with a 'recommendations' array. 
+    Each item MUST contain:
+    'name', 'category' (e.g., The Crowd-Pleaser), 'address', 'why_its_perfect' (2-sentence pitch EXPLAINING how it fits the filters and its specific category), and 'vibe_check' (3-word summary).
     """
 
     response = client.chat.completions.create(
@@ -254,6 +273,8 @@ if top_3_clicked or get_wild_clicked:
                         st.write("### Your Handpicked Spots:")
                         for spot in results.get("recommendations", []):
                             with st.container():
+                                # Adds a sleek category label above the name
+                                st.markdown(f"<span style='color: #558b2f; font-weight: 700; text-transform: uppercase; font-size: 0.85rem; letter-spacing: 1px;'>{spot.get('category', 'Top Pick')}</span>", unsafe_allow_html=True)
                                 st.subheader(spot['name'])
                                 st.caption(f"📍 {spot['address']} | ✨ **{spot['vibe_check']}**")
                                 st.write(spot['why_its_perfect'])
@@ -263,7 +284,6 @@ if top_3_clicked or get_wild_clicked:
                                     search_term += f"+{location_input.replace(' ', '+')}"
                                 map_url = f"https://www.google.com/maps/search/?api=1&query={search_term}"
                                 
-                                # Sleek button for standard results too
                                 st.markdown(f'<a href="{map_url}" target="_blank" class="take-me-there-btn">Take me there!</a>', unsafe_allow_html=True)
                                 st.write("---")
                             
