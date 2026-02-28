@@ -8,55 +8,117 @@ from streamlit_geolocation import streamlit_geolocation
 # ==========================================
 # 1. CONFIGURATION & SECRETS
 # ==========================================
-# Pulling securely from Streamlit Cloud Secrets
 GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 
 # ==========================================
-# 2. HELPER FUNCTIONS (The Engine)
+# 2. CUSTOM CSS & STYLING (The UX Layer)
+# ==========================================
+# This hides the default Streamlit header and injects our custom UI
+st.set_page_config(page_title="Get Wild", page_icon="🌿", layout="centered")
+
+custom_css = """
+<style>
+    /* Custom Title Area */
+    .hero-header {
+        text-align: center;
+        padding: 2rem 0 1rem 0;
+    }
+    .hero-title {
+        color: #2e7d32;
+        font-family: 'Helvetica Neue', sans-serif;
+        font-size: 3.5rem;
+        font-weight: 800;
+        letter-spacing: -1px;
+        text-transform: uppercase;
+        margin-bottom: 0;
+        line-height: 1.1;
+    }
+    .hero-subtitle {
+        color: #558b2f;
+        font-size: 1.2rem;
+        font-weight: 400;
+        letter-spacing: 1px;
+        margin-top: 10px;
+    }
+    
+    /* Sleek CTA Button */
+    .take-me-there-btn {
+        display: inline-block;
+        background-color: #2e7d32;
+        color: white !important;
+        text-align: center;
+        padding: 12px 24px;
+        border-radius: 8px;
+        text-decoration: none;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        width: 100%;
+        transition: all 0.3s ease;
+        margin-top: 10px;
+    }
+    .take-me-there-btn:hover {
+        background-color: #1b5e20;
+        box-shadow: 0 4px 12px rgba(46, 125, 50, 0.3);
+    }
+
+    /* The 'Get Wild' Special Reveal Card */
+    .wild-card {
+        background: linear-gradient(135deg, #f1f8e9 0%, #dcedc8 100%);
+        border-left: 6px solid #558b2f;
+        border-radius: 12px;
+        padding: 25px;
+        margin-top: 20px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+        animation: fadeSlideUp 0.8s ease-out forwards;
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    
+    @keyframes fadeSlideUp {
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+</style>
+"""
+st.markdown(custom_css, unsafe_allow_html=True)
+
+# ==========================================
+# 3. HELPER FUNCTIONS (The Engine)
 # ==========================================
 def get_coordinates(location_query):
-    """Converts a ZIP code or City into Latitude/Longitude using Google."""
     url = f"https://maps.googleapis.com/maps/api/geocode/json?address={location_query}&key={GOOGLE_API_KEY}"
     response = requests.get(url).json()
-    
     if response['status'] == 'OK':
-        location = response['results'][0]['geometry']['location']
-        return location['lat'], location['lng']
-    else:
-        return None, None
+        loc = response['results'][0]['geometry']['location']
+        return loc['lat'], loc['lng']
+    return None, None
 
 def fetch_local_places(lat, lng, radius_miles):
-    """Fetches raw data from Google Places API using dynamic coordinates."""
     radius_meters = int(radius_miles * 1609.34)
     url = "https://places.googleapis.com/v1/places:searchNearby"
-    
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": GOOGLE_API_KEY,
         "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.types"
     }
-    
     data = {
-        "includedTypes": ["restaurant", "bar", "cafe", "park", "tourist_attraction", "museum", "bowling_alley"],
+        "includedTypes": ["restaurant", "bar", "cafe", "park", "tourist_attraction", "museum", "bowling_alley", "hiking_area"],
         "maxResultCount": 20,
         "locationRestriction": {
-            "circle": {
-                "center": {"latitude": lat, "longitude": lng},
-                "radius": radius_meters
-            }
+            "circle": {"center": {"latitude": lat, "longitude": lng}, "radius": radius_meters}
         }
     }
-
     response = requests.post(url, headers=headers, json=data)
     return response.json().get('places', [])
 
 def get_ai_recommendations(raw_places, user_filters, current_time, location_name, mode="top_3"):
-    """Sends raw places, user filters, and the CURRENT TIME to the LLM."""
     client = OpenAI(api_key=OPENAI_API_KEY)
     
     if mode == "get_wild":
-        instruction = "Select EXACTLY ONE completely random, but highly-rated option that fits the criteria for a spontaneous adventure."
+        instruction = "Select EXACTLY ONE highly-rated option that fits the criteria for a spontaneous adventure."
     else:
         instruction = "Select the absolute BEST 3 options that match the user's filters. Filter out tourist traps."
 
@@ -64,10 +126,10 @@ def get_ai_recommendations(raw_places, user_filters, current_time, location_name
     You are the expert curation engine for a local discovery app called 'Get Wild'.
     
     CRITICAL CONTEXT:
-    - The user is searching near: {location_name}
-    - The current local day and time is: {current_time}
+    - Searching near: {location_name}
+    - Current local time: {current_time}
     
-    Using the time provided, DO NOT recommend places that are likely closed or have the wrong vibe for this time of day (e.g., no nightclubs at 9 AM, no breakfast cafes at 8 PM).
+    Using the time provided, DO NOT recommend places that are likely closed or have the wrong vibe for this time of day.
     
     {instruction}
     Return the result STRICTLY as a JSON object with a 'recommendations' array containing:
@@ -85,25 +147,36 @@ def get_ai_recommendations(raw_places, user_filters, current_time, location_name
     return json.loads(response.choices[0].message.content)
 
 # ==========================================
-# 3. STREAMLIT UI (The Frontend)
+# 4. STREAMLIT UI (The Frontend)
 # ==========================================
-st.set_page_config(page_title="Get Wild", page_icon="🔥", layout="centered")
+# Custom Header Injection
+st.markdown("""
+<div class="hero-header">
+    <h1 class="hero-title">Get Wild</h1>
+    <p class="hero-subtitle">Disconnect. Explore. Breathe.</p>
+</div>
+""", unsafe_allow_html=True)
 
-st.title("🔥 Get Wild")
-st.markdown("Skip the endless scrolling. Tell us your vibe, and we'll tell you where to go.")
+st.write("---")
 
 # --- Filters Section ---
 st.subheader("Where are we going?")
 
-# This splits the layout so the text box is wide and the GPS button is small
+# Location Inputs
 loc_col1, loc_col2 = st.columns([5, 1])
 
 with loc_col1:
-    location_input = st.text_input("Enter City or ZIP Code", value="Fairfax, VA", label_visibility="collapsed")
+    # Changed from 'value' to 'placeholder' for better UX
+    location_input = st.text_input("Location", placeholder="Enter City or ZIP Code (e.g., Fairfax, VA)", label_visibility="collapsed")
 
 with loc_col2:
-    # This creates the clickable GPS crosshairs icon
     geo_data = streamlit_geolocation()
+
+# Real-time UI feedback for GPS
+gps_active = False
+if geo_data and geo_data.get('latitude') is not None:
+    gps_active = True
+    st.success("🌿 GPS Location Locked!")
 
 st.write("---")
 st.subheader("What's the plan?")
@@ -118,7 +191,6 @@ with col2:
     cost = st.radio("Cost?", ["Any Price", "Free / Cheap", "Willing to Splurge"])
 
 distance = st.slider("How far are you willing to travel? (Miles)", 1, 20, 5)
-
 current_filters = f"{group_type}, {vibe}, {food_pref}, {cost}, within {distance} miles."
 
 # --- Action Buttons ---
@@ -126,57 +198,74 @@ st.write("---")
 btn_col1, btn_col2 = st.columns(2)
 
 with btn_col1:
-    top_3_clicked = st.button("🌟 Get Top 3 Recommendations", use_container_width=True)
+    top_3_clicked = st.button("🌟 Top 3 Recommendations", use_container_width=True)
 
 with btn_col2:
-    get_wild_clicked = st.button("GET WILD", type="primary", use_container_width=True)
+    # Added the dice back to the button text
+    get_wild_clicked = st.button("🎲 GET WILD", type="primary", use_container_width=True)
 
 # ==========================================
-# 4. EXECUTION LOGIC
+# 5. EXECUTION LOGIC
 # ==========================================
 if top_3_clicked or get_wild_clicked:
     mode = "get_wild" if get_wild_clicked else "top_3"
     
-    if get_wild_clicked:
-        st.balloons() 
-    
-    with st.spinner("Scouting the best spots..."):
-        try:
-            # Determine Location (GPS overrides text input if clicked)
-            lat, lng = None, None
-            location_context = location_input
-            
-            if geo_data and geo_data.get('latitude') is not None and geo_data.get('longitude') is not None:
-                lat = geo_data['latitude']
-                lng = geo_data['longitude']
-                location_context = "their exact GPS coordinates"
-            elif location_input:
-                lat, lng = get_coordinates(location_input)
-            
-            if lat is None:
-                st.error("Couldn't find that location. Try a different ZIP code or click the GPS icon.")
-            else:
-                current_time_str = datetime.now().strftime("%A, %I:%M %p")
+    if not location_input and not gps_active:
+        st.warning("Please enter a location or click the GPS icon first!")
+    else:
+        with st.spinner("Scouting the best spots..."):
+            try:
+                lat, lng = None, None
+                location_context = location_input
                 
-                raw_places = fetch_local_places(lat=lat, lng=lng, radius_miles=distance)
-                results = get_ai_recommendations(raw_places, current_filters, current_time_str, location_context, mode=mode)
+                if gps_active:
+                    lat, lng = geo_data['latitude'], geo_data['longitude']
+                    location_context = "their exact GPS coordinates"
+                elif location_input:
+                    lat, lng = get_coordinates(location_input)
                 
-                st.write("### Your Handpicked Spots:" if mode == "top_3" else "### Your Spontaneous Adventure:")
-                
-                for spot in results.get("recommendations", []):
-                    with st.container():
-                        st.subheader(spot['name'])
-                        st.caption(f"📍 {spot['address']} | ✨ **{spot['vibe_check']}**")
-                        st.write(spot['why_its_perfect'])
-                        
-                        # Build Maps URL
+                if lat is None:
+                    st.error("Couldn't find that location. Try a different ZIP code or City.")
+                else:
+                    current_time_str = datetime.now().strftime("%A, %I:%M %p")
+                    raw_places = fetch_local_places(lat=lat, lng=lng, radius_miles=distance)
+                    results = get_ai_recommendations(raw_places, current_filters, current_time_str, location_context, mode=mode)
+                    
+                    if mode == "get_wild":
+                        # The Custom CSS Reveal Card for Get Wild
+                        spot = results.get("recommendations", [])[0]
                         search_term = spot['name'].replace(' ', '+')
-                        if not (geo_data and geo_data.get('latitude')):
+                        if not gps_active:
                             search_term += f"+{location_input.replace(' ', '+')}"
-                            
                         map_url = f"https://www.google.com/maps/search/?api=1&query={search_term}"
-                        st.markdown(f"[Take me there!]({map_url})")
-                        st.write("---")
                         
-        except Exception as e:
-            st.error(f"Whoops! Something went wrong out in the wild: {e}")
+                        html_card = f"""
+                        <div class="wild-card">
+                            <h4 style="color: #2e7d32; margin-top: 0;">Start Your Adventure</h4>
+                            <h2>{spot['name']}</h2>
+                            <p>📍 <strong>{spot['address']}</strong> | ✨ <i>{spot['vibe_check']}</i></p>
+                            <p style="font-size: 1.1rem; line-height: 1.5;">{spot['why_its_perfect']}</p>
+                            <a href="{map_url}" target="_blank" class="take-me-there-btn">Take me there!</a>
+                        </div>
+                        """
+                        st.markdown(html_card, unsafe_allow_html=True)
+                        
+                    else:
+                        st.write("### Your Handpicked Spots:")
+                        for spot in results.get("recommendations", []):
+                            with st.container():
+                                st.subheader(spot['name'])
+                                st.caption(f"📍 {spot['address']} | ✨ **{spot['vibe_check']}**")
+                                st.write(spot['why_its_perfect'])
+                                
+                                search_term = spot['name'].replace(' ', '+')
+                                if not gps_active:
+                                    search_term += f"+{location_input.replace(' ', '+')}"
+                                map_url = f"https://www.google.com/maps/search/?api=1&query={search_term}"
+                                
+                                # Sleek button for standard results too
+                                st.markdown(f'<a href="{map_url}" target="_blank" class="take-me-there-btn">Take me there!</a>', unsafe_allow_html=True)
+                                st.write("---")
+                            
+            except Exception as e:
+                st.error(f"Whoops! Something went wrong out in the wild: {e}")
