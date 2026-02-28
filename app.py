@@ -6,11 +6,11 @@ from openai import OpenAI
 # ==========================================
 # 1. CONFIGURATION & SECRETS
 # ==========================================
-# In production, store these in Streamlit's secrets management
-GOOGLE_API_KEY = "YOUR_GOOGLE_PLACES_API_KEY"
-OPENAI_API_KEY = "YOUR_OPENAI_API_KEY"
+# Pulling securely from Streamlit Cloud Secrets
+GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
+OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 
-# Set default location to Fairfax, VA for testing
+# Set default location to Fairfax, VA area
 DEFAULT_LAT = 38.8462
 DEFAULT_LNG = -77.3064
 
@@ -40,12 +40,9 @@ def fetch_local_places(radius_miles, vibe_keyword):
         }
     }
 
-    # IMPORTANT: Uncomment below when using a real API key
-    # response = requests.post(url, headers=headers, json=data)
-    # return response.json().get('places', [])
-    
-    # Mock data for initial UI testing
-    return [{"displayName": {"text": "Local Spot A"}, "rating": 4.5}, {"displayName": {"text": "Local Spot B"}, "rating": 4.8}]
+    # The Real API Call
+    response = requests.post(url, headers=headers, json=data)
+    return response.json().get('places', [])
 
 def get_ai_recommendations(raw_places, user_filters, mode="top_3"):
     """Sends raw places and user filters to the LLM for curation."""
@@ -63,8 +60,7 @@ def get_ai_recommendations(raw_places, user_filters, mode="top_3"):
     'name', 'address', 'why_its_perfect' (2-sentence pitch), and 'vibe_check' (3-word summary).
     """
 
-    # IMPORTANT: Uncomment below when using a real API key
-    """
+    # The Real AI Call
     response = client.chat.completions.create(
         model="gpt-4o",
         response_format={ "type": "json_object" },
@@ -74,17 +70,6 @@ def get_ai_recommendations(raw_places, user_filters, mode="top_3"):
         ]
     )
     return json.loads(response.choices[0].message.content)
-    """
-    
-    # Mock response for initial UI testing
-    if mode == "get_wild":
-        return {"recommendations": [{"name": "Mystery Spot", "address": "Somewhere nearby", "why_its_perfect": "It's a surprise!", "vibe_check": "Wild, Fun, Spontaneous"}]}
-    else:
-        return {"recommendations": [
-            {"name": "Curated Spot 1", "address": "123 Main St", "why_its_perfect": "Great for your filters.", "vibe_check": "Chill, Local, Tasty"},
-            {"name": "Curated Spot 2", "address": "456 Oak St", "why_its_perfect": "Awesome outdoor space.", "vibe_check": "Breezy, Open, Fun"},
-            {"name": "Curated Spot 3", "address": "789 Pine St", "why_its_perfect": "Highly rated by locals.", "vibe_check": "Cozy, Warm, Inviting"}
-        ]}
 
 # ==========================================
 # 3. STREAMLIT UI (The Frontend)
