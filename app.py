@@ -10,6 +10,7 @@ from streamlit_geolocation import streamlit_geolocation
 # ==========================================
 GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+TAVILY_API_KEY = st.secrets["TAVILY_API_KEY"] # NEW: The Web Scraper Key
 
 # ==========================================
 # 2. CUSTOM CSS & STYLING
@@ -31,7 +32,7 @@ custom_css = """
 st.markdown(custom_css, unsafe_allow_html=True)
 
 # ==========================================
-# 3. HELPER FUNCTIONS (The Engine)
+# 3. HELPER FUNCTIONS (The V3 Agentic Engine)
 # ==========================================
 def get_coordinates(location_query):
     url = f"https://maps.googleapis.com/maps/api/geocode/json?address={location_query}&key={GOOGLE_API_KEY}"
@@ -42,72 +43,71 @@ def get_coordinates(location_query):
     return None, None
 
 def build_semantic_query(filters_dict):
-    """Translates UI toggles into a clean, human-like search phrase."""
     modifiers = []
-    
-    if filters_dict['group'] == "Date":
-        modifiers.append("romantic")
-    elif filters_dict['group'] == "Family Outing":
-        modifiers.append("kid-friendly")
-    elif filters_dict['group'] == "Friends":
-        modifiers.append("fun lively")
-    elif filters_dict['group'] == "Solo":
-        modifiers.append("cozy")
+    if filters_dict['group'] == "Date": modifiers.append("romantic")
+    elif filters_dict['group'] == "Family Outing": modifiers.append("kid-friendly")
+    elif filters_dict['group'] == "Friends": modifiers.append("fun lively")
+    elif filters_dict['group'] == "Solo": modifiers.append("cozy")
 
-    if filters_dict.get('specific'):
-        modifiers.append(filters_dict['specific'])
+    if filters_dict.get('specific'): modifiers.append(filters_dict['specific'])
 
     modifier_str = " ".join(modifiers)
     
-    # Establish the base noun
-    if filters_dict['food'] == "Full Meal":
-        base = "restaurants"
-    elif filters_dict['food'] == "Just Drinks/Coffee":
-        base = "bars, cafes, or breweries"
-    else:
-        if filters_dict['vibe'] == "Outside":
-            base = "parks and outdoor activities"
-        else:
-            base = "attractions and activities"
+    if filters_dict['food'] == "Full Meal": base = "restaurants"
+    elif filters_dict['food'] == "Just Drinks/Coffee": base = "bars, cafes, or breweries"
+    else: base = "parks and outdoor activities" if filters_dict['vibe'] == "Outside" else "attractions and activities"
             
     query = f"{modifier_str} {base}".strip()
-    
-    # Append outdoor constraint if applicable
     if filters_dict['vibe'] == "Outside" and filters_dict['food'] in ["Full Meal", "Just Drinks/Coffee"]:
         query += " with outdoor seating"
         
     return query
 
 def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
-    """Uses Google's Text Search bounded tightly to a GPS coordinate radius."""
     url = "https://places.googleapis.com/v1/places:searchText"
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": GOOGLE_API_KEY,
         "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.types,places.regularOpeningHours,places.priceLevel,places.editorialSummary"
     }
-    
     radius_meters = int(radius_miles * 1609.34)
     data = {
         "textQuery": semantic_query,
         "pageSize": 20,
-        "locationBias": {            # <--- THE FIX
-            "circle": {
-                "center": {"latitude": lat, "longitude": lng},
-                "radius": radius_meters
-            }
+        "locationBias": {
+            "circle": {"center": {"latitude": lat, "longitude": lng}, "radius": radius_meters}
         }
     }
-    
     response = requests.post(url, headers=headers, json=data)
-    
-    # Hard stop and print error if Google rejects the API call
     if response.status_code != 200:
-        raise Exception(f"Google API Error ({response.status_code}): {response.text}")
-        
+        raise Exception(f"Google API Error: {response.text}")
     return response.json().get('places', [])
 
-def get_ai_recommendations(raw_places, filters_dict, location_name, mode="top_3"):
+# --- NEW: The Agentic Web Scraper ---
+def fetch_live_events(location_name, intended_time, group_type):
+    """Uses Tavily to scrape the web for local events happening at the intended time."""
+    url = "https://api.tavily.com/search"
+    query = f"What fun local events, live music, pop-ups, or specials are happening {intended_time} near {location_name} for a {group_type}?"
+    
+    payload = {
+        "api_key": TAVILY_API_KEY,
+        "query": query,
+        "search_depth": "basic",
+        "include_answer": True,
+        "max_results": 3
+    }
+    
+    try:
+        response = requests.post(url, json=payload)
+        data = response.json()
+        # Returns a synthesized summary of the web search
+        answer = data.get("answer", "")
+        context = " ".join([res.get("content", "") for res in data.get("results", [])])
+        return f"TAVILY AI WEB SEARCH SUMMARY: {answer} \n\nRAW WEB CONTEXT: {context}"
+    except Exception as e:
+        return "No live event data found on the web."
+
+def get_ai_recommendations(raw_places, live_events_data, filters_dict, location_name, mode="top_3"):
     client = OpenAI(api_key=OPENAI_API_KEY)
     intended_time = filters_dict['time']
     specific_request = filters_dict.get('specific', '')
@@ -122,7 +122,7 @@ def get_ai_recommendations(raw_places, filters_dict, location_name, mode="top_3"
         instruction = """
         Return EXACTLY 3 options from the data, structured strictly as:
         1. The Crowd-Pleaser: Established, highly-rated, local favorite.
-        2. The Fresh Take / Vibe Check: Something trendy, highly aesthetic, or experiential.
+        2. The Fresh Take / Live Event: You MUST use the 'LIVE WEB SEARCH EVENTS' data to recommend something happening *specifically* at the user's intended time (e.g., a trivia night, live band, or local festival). If the web search found nothing good, pick a trendy, experiential place from the Google data instead.
         3. The Hidden Gem: A spot that feels off the beaten path, unique, or known mostly to locals.
         """
 
@@ -134,20 +134,21 @@ def get_ai_recommendations(raw_places, filters_dict, location_name, mode="top_3"
     - User Profile: {filters_dict['group']} looking for {filters_dict['food']} in a {filters_dict['vibe']} setting.
     - SPECIAL REQUEST: "{specific_request if specific_request else 'None'}"
     
+    DATA SOURCES:
+    1. GOOGLE PLACES DATA: A list of established local venues.
+    2. LIVE WEB SEARCH EVENTS: Live data scraped from the web about things happening right now.
+    
     SPECIAL REQUEST MANDATE:
-    If a SPECIAL REQUEST is provided above, it is your absolute highest priority. You MUST select places that satisfy this keyword or vibe, and explicitly mention how it satisfies the request in your pitch.
+    If a SPECIAL REQUEST is provided, it is your absolute highest priority. 
     
-    ANTI-HALLUCINATION & ANTI-CHAIN PROTOCOL:
-    1. ONLY recommend places from the 'AVAILABLE PLACES' JSON. Do not invent places.
-    2. LOCAL PRIORITY: Severely penalize massive national corporate chains unless they are the ONLY viable options. Prioritize local businesses.
-    
-    TEMPORAL RULES:
-    Review the 'regularOpeningHours'. If a place is likely closed or has a dead atmosphere during the user's '{intended_time}', DO NOT select it.
+    ANTI-HALLUCINATION PROTOCOL:
+    1. ONLY recommend places from the provided JSON or the Web Search data. Do not invent places or events.
+    2. Severely penalize massive corporate chains.
     
     {instruction}
     
     Return STRICTLY as a JSON object with a 'recommendations' array containing:
-    'name', 'category', 'address', 'why_its_perfect' (2 sentences proving why it fits their filters), and 'vibe_check' (3 words).
+    'name', 'category', 'address', 'why_its_perfect' (2 sentences proving why it fits their filters. If it's a live event, explicitly mention what the event is!), and 'vibe_check' (3 words).
     """
 
     response = client.chat.completions.create(
@@ -155,7 +156,7 @@ def get_ai_recommendations(raw_places, filters_dict, location_name, mode="top_3"
         response_format={ "type": "json_object" },
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"AVAILABLE PLACES: {json.dumps(raw_places)}"}
+            {"role": "user", "content": f"GOOGLE PLACES DATA: {json.dumps(raw_places)}\n\nLIVE WEB SEARCH EVENTS:\n{live_events_data}"}
         ]
     )
     return json.loads(response.choices[0].message.content)
@@ -195,16 +196,14 @@ with col_time:
     time_toggle = st.radio("Time?", ["Daytime", "Night"], horizontal=True)
 
 intended_time = f"{day_toggle} ({time_toggle})"
-
-st.write("") # Spacer
+st.write("") 
 
 col_group, col_vibe = st.columns(2)
 with col_group:
     group_type = st.selectbox("Who is going?", ["Date", "Family Outing", "Friends", "Solo"])
 with col_vibe:
     vibe = st.radio("Setting?", ["Doesn't Matter", "Outside", "Inside"], horizontal=True)
-
-st.write("") # Spacer
+st.write("") 
 
 col_food, col_dist = st.columns(2)
 with col_food:
@@ -212,13 +211,8 @@ with col_food:
 with col_dist:
     distance = st.slider("Max Distance (Miles)", 1, 20, 5)
 
-# --- PROGRESSIVE DISCLOSURE FOR SPECIFIC REQUESTS ---
 with st.expander("Need something specific? (Optional)", expanded=False):
-    specific_request = st.text_input(
-        "Keyword", 
-        placeholder="e.g., 'dog-friendly patio', 'live jazz', 'vegan options'", 
-        label_visibility="collapsed"
-    )
+    specific_request = st.text_input("Keyword", placeholder="e.g., 'live jazz', 'vegan options'", label_visibility="collapsed")
 
 filters_dict = {
     "group": group_type,
@@ -228,7 +222,6 @@ filters_dict = {
     "specific": specific_request
 }
 
-# --- Action Buttons ---
 st.write("---")
 btn_col1, btn_col2 = st.columns(2)
 
@@ -249,63 +242,63 @@ if top_3_clicked or get_wild_clicked:
     if not location_input and not gps_active:
         st.warning("Please enter a location or click the GPS icon first!")
     else:
-        with st.spinner("Scouting the best spots..."):
+        # Changed st.spinner to st.status for better progressive UX loading
+        with st.status("Scouting the wild...", expanded=True) as status:
             try:
-                # 1. Grab Lat/Lng Coordinates FIRST
-                lat, lng = None, None
                 location_context = location_input
-                
                 if gps_active:
                     lat, lng = geo_data['latitude'], geo_data['longitude']
                     location_context = "their exact GPS coordinates"
-                elif location_input:
+                else:
+                    st.write("📍 Converting location to GPS...")
                     lat, lng = get_coordinates(location_input)
                 
                 if lat is None:
-                    st.error("Couldn't find that location. Try a different ZIP code or City.")
+                    status.update(label="Location error", state="error")
+                    st.error("Couldn't find that location.")
                 else:
-                    # 2. Build the Natural Language Query
+                    st.write("🏢 Checking local venues via Google...")
                     semantic_query = build_semantic_query(filters_dict)
-                    
-                    # 3. Ask Google for spots using the Query + Coordinates
                     raw_places = fetch_places_semantic(semantic_query, lat, lng, distance)
                     
-                    if not raw_places:
-                        st.error(f"Couldn't find high-quality spots for '{semantic_query}' in that area. Try expanding your distance or filters.")
-                    else:
-                        # 4. Curate with AI
-                        results = get_ai_recommendations(raw_places, filters_dict, location_context, mode=mode)
+                    st.write("🌍 Scanning the local web for live events...")
+                    live_events_data = fetch_live_events(location_input if location_input else "nearby", intended_time, group_type)
+                    
+                    st.write("🧠 Curating your perfect outing...")
+                    results = get_ai_recommendations(raw_places, live_events_data, filters_dict, location_context, mode=mode)
+                    
+                    status.update(label="Ready to go!", state="complete", expanded=False)
+                    
+                    if mode == "get_wild":
+                        spot = results.get("recommendations", [])[0]
+                        search_term = spot['name'].replace(' ', '+') + f"+{location_input.replace(' ', '+')}"
+                        map_url = f"https://www.google.com/maps/search/?api=1&query={search_term}"
                         
-                        if mode == "get_wild":
-                            spot = results.get("recommendations", [])[0]
-                            search_term = spot['name'].replace(' ', '+') + f"+{location_input.replace(' ', '+')}"
-                            map_url = f"https://www.google.com/maps/search/?api=1&query={search_term}"
-                            
-                            html_card = f"""
-                            <div class="wild-card">
-                                <h4 style="color: #2e7d32; margin-top: 0;">Start Your Adventure</h4>
-                                <h2>{spot['name']}</h2>
-                                <p>📍 <strong>{spot['address']}</strong> | ✨ <i>{spot['vibe_check']}</i></p>
-                                <p style="font-size: 1.1rem; line-height: 1.5;">{spot['why_its_perfect']}</p>
-                                <a href="{map_url}" target="_blank" class="take-me-there-btn">Take me there!</a>
-                            </div>
-                            """
-                            st.markdown(html_card, unsafe_allow_html=True)
-                            
-                        else:
-                            st.write("### Your Handpicked Spots:")
-                            for spot in results.get("recommendations", []):
-                                with st.container():
-                                    st.markdown(f"<span style='color: #558b2f; font-weight: 700; text-transform: uppercase; font-size: 0.85rem; letter-spacing: 1px;'>{spot.get('category', 'Top Pick')}</span>", unsafe_allow_html=True)
-                                    st.subheader(spot['name'])
-                                    st.caption(f"📍 {spot['address']} | ✨ **{spot['vibe_check']}**")
-                                    st.write(spot['why_its_perfect'])
-                                    
-                                    search_term = spot['name'].replace(' ', '+') + f"+{location_input.replace(' ', '+')}"
-                                    map_url = f"https://www.google.com/maps/search/?api=1&query={search_term}"
-                                    
-                                    st.markdown(f'<a href="{map_url}" target="_blank" class="take-me-there-btn">Take me there!</a>', unsafe_allow_html=True)
-                                    st.write("---")
+                        html_card = f"""
+                        <div class="wild-card">
+                            <h4 style="color: #2e7d32; margin-top: 0;">Start Your Adventure</h4>
+                            <h2>{spot['name']}</h2>
+                            <p>📍 <strong>{spot['address']}</strong> | ✨ <i>{spot['vibe_check']}</i></p>
+                            <p style="font-size: 1.1rem; line-height: 1.5;">{spot['why_its_perfect']}</p>
+                            <a href="{map_url}" target="_blank" class="take-me-there-btn">Take me there!</a>
+                        </div>
+                        """
+                        st.markdown(html_card, unsafe_allow_html=True)
+                        
+                    else:
+                        st.write("### Your Handpicked Spots:")
+                        for spot in results.get("recommendations", []):
+                            with st.container():
+                                st.markdown(f"<span style='color: #558b2f; font-weight: 700; text-transform: uppercase; font-size: 0.85rem; letter-spacing: 1px;'>{spot.get('category', 'Top Pick')}</span>", unsafe_allow_html=True)
+                                st.subheader(spot['name'])
+                                st.caption(f"📍 {spot['address']} | ✨ **{spot['vibe_check']}**")
+                                st.write(spot['why_its_perfect'])
+                                
+                                search_term = spot['name'].replace(' ', '+') + f"+{location_input.replace(' ', '+')}"
+                                map_url = f"https://www.google.com/maps/search/?api=1&query={search_term}"
+                                st.markdown(f'<a href="{map_url}" target="_blank" class="take-me-there-btn">Take me there!</a>', unsafe_allow_html=True)
+                                st.write("---")
                             
             except Exception as e:
+                status.update(label="Error encountered", state="error")
                 st.error(f"Whoops! Something went wrong out in the wild: {e}")
