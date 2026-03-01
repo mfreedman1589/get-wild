@@ -6,6 +6,7 @@ from openai import OpenAI
 from datetime import datetime
 from streamlit_geolocation import streamlit_geolocation
 from supabase import create_client, Client
+from tenacity import retry, wait_exponential, stop_after_attempt
 
 # ==========================================
 # 1. CONFIGURATION & SECRETS
@@ -13,6 +14,7 @@ from supabase import create_client, Client
 GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 TAVILY_API_KEY = st.secrets["TAVILY_API_KEY"]
+OPENWEATHER_API_KEY = st.secrets["OPENWEATHER_API_KEY"] # Added Weather Key
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
@@ -63,7 +65,6 @@ def get_profile(user_id):
     except: return None
 
 def get_disliked_spots(user_id):
-    """Pulls the user's 1-star rated spots to create a blacklist."""
     try:
         res = supabase.table('saved_spots').select('spot_name').eq('user_id', user_id).eq('rating', 1).execute()
         return [spot['spot_name'] for spot in res.data] if res.data else []
@@ -75,7 +76,6 @@ def save_spot_to_db(user_id, name, address, category, rating=None, notes=""):
             'user_id': user_id, 'spot_name': name, 'address': address, 'category': category, 'rating': rating, 'user_notes': notes
         }).execute()
         
-        # Gamification: Increment Tally if it's a positive save
         if rating != 1:
             prof = get_profile(user_id)
             new_tally = (prof.get('wild_tally') or 0) + 1
@@ -95,6 +95,17 @@ def get_coordinates(location_query):
         loc = response['results'][0]['geometry']['location']
         return loc['lat'], loc['lng']
     return None, None
+
+def get_live_weather(lat, lng):
+    """Fetches real-time weather using OpenWeatherMap based on geocoordinates."""
+    try:
+        url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lng}&units=imperial&appid={OPENWEATHER_API_KEY}" #
+        res = requests.get(url).json()
+        if res.get("cod") == 200:
+            return f"{res['main']['temp']}°F and {res['weather'][0]['description']}"
+        return "Weather data unavailable."
+    except:
+        return "Weather service currently unreachable."
 
 def build_semantic_query(filters_dict, profile):
     modifiers = []
@@ -126,7 +137,6 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": GOOGLE_API_KEY,
-        # V8 UPDATE: Added websiteUri and photos to the data mask
         "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.websiteUri,places.photos,places.editorialSummary"
     }
     radius_meters = int(radius_miles * 1609.34)
@@ -149,9 +159,14 @@ def fetch_live_events(location_name, intended_time, group_type, current_date):
         return f"TAVILY AI WEB SEARCH SUMMARY: {data.get('answer', '')}"
     except: return "No live event data found."
 
-def get_ai_recommendations(raw_places, live_events_data, filters_dict, location_name, current_date, profile, disliked_spots, mode="top_3"):
+@retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3))
+def get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_name, current_date, profile, disliked_spots, mode="top_3"):
     client = OpenAI(api_key=OPENAI_API_KEY)
     
+    # 429 FIX: Safely trim the payloads to dramatically reduce the token count per request
+    trimmed_places = raw_places[:8] if isinstance(raw_places, list) and len(raw_places) > 8 else raw_places
+    safe_events_data = live_events_data[:4000] if isinstance(live_events_data, str) else live_events_data
+
     profile_context = ""
     if profile:
         stroller = "MUST be stroller accessible." if profile.get('needs_stroller_access') else ""
@@ -159,7 +174,6 @@ def get_ai_recommendations(raw_places, live_events_data, filters_dict, location_
         vibe_pref = f"Prioritize locations matching this vibe: {profile.get('vibe_preference')}." if profile.get('vibe_preference') else ""
         profile_context = f"\nUSER BASELINE PROFILE:\n{stroller}\n{dog}\n{vibe_pref}"
 
-    # V8 UPDATE: The Negative Feedback Loop
     blacklist_context = f"CRITICAL: DO NOT RECOMMEND ANY OF THESE PLACES: {', '.join(disliked_spots)}" if disliked_spots else ""
 
     instruction = """Select EXACTLY ONE option from the data. Assign it the category: 'Spontaneous Adventure'.""" if mode == "get_wild" else """Return EXACTLY 3 options from the data, structured strictly as:
@@ -172,6 +186,7 @@ def get_ai_recommendations(raw_places, live_events_data, filters_dict, location_
     
     CRITICAL CONTEXT:
     - User Location: {location_name}
+    - CURRENT WEATHER: {weather_report}
     - Today's Date: {current_date}
     - User Intended Time: {filters_dict['time']}
     - Session Profile: {filters_dict['group']} looking for {filters_dict['food']} in a {filters_dict['vibe']} setting.
@@ -179,9 +194,10 @@ def get_ai_recommendations(raw_places, live_events_data, filters_dict, location_
     {profile_context}
     {blacklist_context}
     
-    GEOGRAPHY & HALLUCINATION SHACKLES (MANDATORY):
-    1. DO NOT INVENT PLACES. Must be in the provided data.
-    2. STRICT GEOGRAPHY: Must be physically in or immediately bordering {location_name}.
+    GEOGRAPHY, WEATHER & HALLUCINATION SHACKLES (MANDATORY):
+    1. WEATHER PIVOT: If weather report indicates RAIN, SNOW, or TEMP < 45°F, you MUST prioritize indoor venues or those with heated patios.
+    2. DO NOT INVENT PLACES. Must be in the provided data.
+    3. STRICT GEOGRAPHY: Must be physically in or immediately bordering {location_name}.
     
     DATA SOURCES:
     1. GOOGLE PLACES DATA
@@ -198,31 +214,25 @@ def get_ai_recommendations(raw_places, live_events_data, filters_dict, location_
         response_format={ "type": "json_object" },
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"GOOGLE PLACES DATA: {json.dumps(raw_places)}\n\nLIVE WEB SEARCH EVENTS:\n{live_events_data}"}
-        ]
+            {"role": "user", "content": f"GOOGLE PLACES DATA: {json.dumps(trimmed_places)}\n\nLIVE WEB SEARCH EVENTS:\n{safe_events_data}"}
+        ],
+        max_tokens=450 # 429 FIX: Caps the output length so we don't bleed tokens
     )
     return json.loads(response.choices[0].message.content)
 
 def render_spot_card(spot, location_input, user_id):
-    """V8 UI UPDATE: Renders a premium card with images and dynamic outbound links."""
-    # 1. Map URL
     search_term = spot['name'].replace(' ', '+') + f"+{location_input.replace(' ', '+')}"
     map_url = f"https://www.google.com/maps/search/?api=1&query={search_term}"
-    
-    # 2. Uber Deep Link
     encoded_address = urllib.parse.quote(spot['address'])
     uber_url = f"https://m.uber.com/ul/?action=setPickup&pickup=my_location&dropoff[formatted_address]={encoded_address}"
     
-    # 3. Photo URL
     img_html = ""
     if spot.get('photo_ref'):
         img_url = f"https://places.googleapis.com/v1/{spot['photo_ref']}/media?key={GOOGLE_API_KEY}&maxHeightPx=400&maxWidthPx=800"
         img_html = f'<img src="{img_url}" class="wild-card-img">'
     
-    # 4. Website Link HTML
     website_html = f'<a href="{spot["website"]}" target="_blank" class="outbound-link">🌐 Website</a>' if spot.get('website') else ""
 
-    # Generate the Card HTML
     html_card = f"""
     <div class="wild-card">
         {img_html}
@@ -241,14 +251,12 @@ def render_spot_card(spot, location_input, user_id):
     """
     st.markdown(html_card, unsafe_allow_html=True)
     
-    # 5. Interactive Streamlit Buttons (Save & Thumbs Down)
     col1, col2, col3 = st.columns([1, 1, 2])
     with col1:
         if st.button("🔖 Save to List", key=f"save_{spot['name']}"):
             save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'))
     with col2:
         if st.button("🚫 Not for me", key=f"hate_{spot['name']}"):
-            # Saving with a 1-star rating triggers the blacklist
             save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'), rating=1, notes="Blacklisted via quick-button.")
 
 # ==========================================
@@ -362,13 +370,18 @@ else:
                         
                         if lat is None: st.error("Couldn't find that location.")
                         else:
-                            # Pull profile and blacklisted spots before asking AI
+                            # 1. Fetch the Weather using coordinates
+                            weather_report = get_live_weather(lat, lng)
+                            st.info(f"🌡️ Weather Check: {weather_report}")
+                            
+                            # 2. Proceed with API lookups
                             disliked_spots = get_disliked_spots(st.session_state.user.id)
                             semantic_query = build_semantic_query(filters_dict, user_profile)
                             raw_places = fetch_places_semantic(semantic_query, lat, lng, distance)
                             live_events_data = fetch_live_events(location_input if location_input else "nearby", intended_time, group_type, current_date)
                             
-                            st.session_state.current_results = get_ai_recommendations(raw_places, live_events_data, filters_dict, location_context, current_date, user_profile, disliked_spots, mode=mode)
+                            # 3. Call AI with weather_report injected
+                            st.session_state.current_results = get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_context, current_date, user_profile, disliked_spots, mode=mode)
                             st.session_state.current_mode = mode
                     except Exception as e: st.error(f"Error: {e}")
 
@@ -384,7 +397,6 @@ else:
     with tab_profile:
         current_prof = get_profile(st.session_state.user.id) or {}
         
-        # Gamification Scoreboard
         st.markdown(f"### 🏆 Get Wild Tally: **{current_prof.get('wild_tally', 0)}**")
         st.write("Save spots to increase your tally and build your exploration streak!")
         st.write("---")
@@ -424,7 +436,6 @@ else:
             st.info("You haven't saved any spots yet. Go explore!")
         else:
             for saved in saved_spots:
-                # Add a visual indicator for blacklisted spots
                 icon = "🚫" if saved['rating'] == 1 else "📍"
                 with st.expander(f"{icon} {saved['spot_name']}"):
                     st.caption(saved['address'])
