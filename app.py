@@ -80,14 +80,15 @@ if 'session_seen_spots' not in st.session_state: st.session_state.session_seen_s
 if 'search_active' not in st.session_state: st.session_state.search_active = False
 if 'trigger_fetch' not in st.session_state: st.session_state.trigger_fetch = False
 
-if 'loc_input' not in st.session_state: st.session_state.loc_input = ""
-if 'day_choice' not in st.session_state: st.session_state.day_choice = "☀️ Today"
-if 'time_choice' not in st.session_state: st.session_state.time_choice = "🌙 Night"
-if 'group_type' not in st.session_state: st.session_state.group_type = "Date"
-if 'vibe' not in st.session_state: st.session_state.vibe = "Doesn't Matter"
-if 'food_pref' not in st.session_state: st.session_state.food_pref = "Full Meal"
-if 'dist' not in st.session_state: st.session_state.dist = 5
-if 'specific' not in st.session_state: st.session_state.specific = ""
+# FIX: Persistent memory state variables (Detached from Streamlit widget destruction)
+if 'mem_loc' not in st.session_state: st.session_state.mem_loc = ""
+if 'mem_day' not in st.session_state: st.session_state.mem_day = "☀️ Today"
+if 'mem_time' not in st.session_state: st.session_state.mem_time = "🌙 Night"
+if 'mem_group' not in st.session_state: st.session_state.mem_group = "Date"
+if 'mem_vibe' not in st.session_state: st.session_state.mem_vibe = "Doesn't Matter"
+if 'mem_food' not in st.session_state: st.session_state.mem_food = "Full Meal"
+if 'mem_dist' not in st.session_state: st.session_state.mem_dist = 5
+if 'mem_spec' not in st.session_state: st.session_state.mem_spec = ""
 
 def get_profile(user_id):
     try:
@@ -210,7 +211,8 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
 
 def fetch_live_events(location_name, intended_time, group_type, target_date_str, relative_day):
     url = "https://api.tavily.com/search"
-    query = f"Find events, live music, festivals, or pop-ups happening EXACTLY {relative_day}, {target_date_str}, in {location_name}. Ignore any events happening on other dates."
+    # FIX: Bulletproof geography requirement for the web scraper
+    query = f"Find events, live music, or festivals happening EXACTLY {relative_day}, {target_date_str}, STRICTLY within a 15-mile radius of {location_name}. Discard any events outside this city/state. Provide venue name, time, and link."
     payload = {"api_key": TAVILY_API_KEY, "query": query, "search_depth": "basic", "include_answer": True, "max_results": 3}
     try:
         response = requests.post(url, json=payload, timeout=15)
@@ -239,6 +241,7 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
         2. The Fresh Take / Live Event: Prioritize the 'LIVE WEB SEARCH EVENTS' data.
         3. The Hidden Gem: A spot that feels unique."""
 
+    # FIX: Extremely strict event formatting and geographic checks
     system_prompt = f"""
     You are a luxury local concierge for an app called 'Get Wild'.
     
@@ -252,15 +255,15 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
     {blacklist_context}
     
     GEOGRAPHY, WEATHER & EVENT SHACKLES:
-    1. STRICT EVENT DATES: If recommending a live event or festival, verify it is happening {relative_day} ({target_date_str}). Do not recommend events on other dates. Include the EVENT TIME and VENUE in the description!
-    2. WEATHER PIVOT: If weather report indicates RAIN, SNOW, or TEMP < 45°F, prioritize indoor venues or those with heated patios.
-    3. DO NOT INVENT PLACES. Must be in the provided data.
-    4. Provide approximate lat/lng for live events based on the city if exact coordinates are missing.
+    1. SUPER STRICT GEOGRAPHY: EVERY recommendation MUST be physically located in or within 20 miles of {location_name}. NEVER recommend a place in another country (like Canada) or distant state. If an event in the web search is out of town, completely ignore it and use Google Places instead.
+    2. STRICT EVENT DETAILS: If recommending a live event, you MUST verify it is happening {relative_day} ({target_date_str}). The 'why_its_perfect' field MUST start with the exact time and venue. (e.g., "[8:00 PM @ The Birchmere]: This concert is...").
+    3. WEATHER PIVOT: If weather report indicates RAIN, SNOW, or TEMP < 45°F, prioritize indoor venues or those with heated patios.
+    4. DO NOT INVENT PLACES. Must be in the provided data. Try to pull the website URL for events from the web search.
     
     {instruction}
     
     Return STRICTLY as a JSON object with a 'recommendations' array containing:
-    'name', 'category', 'address', 'why_its_perfect' (2 sentences incorporating event time/location if applicable), 'vibe_check' (3 words), 'website' (URL if available in data, otherwise empty string), 'photo_ref' (The string from places.photos[0].name if available, otherwise empty), 'lat' (float), and 'lng' (float).
+    'name', 'category', 'address', 'why_its_perfect' (2-3 sentences), 'vibe_check' (3 words), 'website' (URL if available, otherwise empty string), 'photo_ref' (The string from places.photos[0].name if available, otherwise empty), 'lat' (float), and 'lng' (float).
     """
 
     response = client.chat.completions.create(
@@ -270,7 +273,7 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"GOOGLE PLACES DATA: {json.dumps(trimmed_places)}\n\nLIVE WEB SEARCH EVENTS:\n{safe_events_data}"}
         ],
-        max_tokens=2500 # INCREASED MASSIVELY: Prevents the JSONDecodeError / cutoff issue
+        max_tokens=2500 
     )
     
     raw_content = response.choices[0].message.content.strip()
@@ -386,17 +389,7 @@ if st.session_state.user is None:
                 except Exception as e: st.error(f"Signup failed: {e}")
 
 else:
-    col1, col2 = st.columns([4, 1])
-    with col2:
-        if st.button("Log Out"):
-            supabase.auth.sign_out()
-            st.session_state.user = None
-            st.session_state.current_results = None
-            st.session_state.session_seen_spots = []
-            st.session_state.search_active = False
-            st.session_state.trigger_fetch = False
-            st.rerun()
-            
+    # Notice: The top Logout button is completely gone! It moved to Profile.
     tab_explore, tab_profile, tab_saved = st.tabs(["🌍 Explore", "👤 My Profile", "⭐ Saved Spots"])
 
     with tab_explore:
@@ -406,8 +399,12 @@ else:
         if not st.session_state.search_active:
             st.subheader("Where are we going?")
             loc_col1, loc_col2 = st.columns([5, 1])
-            with loc_col1: st.text_input("Location", key="loc_input", placeholder="Enter City or ZIP Code", label_visibility="collapsed")
-            with loc_col2: geo_data = streamlit_geolocation()
+            
+            # Using our secure memory variables so the UI remembers your choices
+            with loc_col1: 
+                ui_loc = st.text_input("Location", value=st.session_state.mem_loc, placeholder="Enter City or ZIP Code", label_visibility="collapsed")
+            with loc_col2: 
+                geo_data = streamlit_geolocation()
 
             gps_active = False
             if geo_data and geo_data.get('latitude') is not None:
@@ -418,22 +415,38 @@ else:
             st.subheader("What's the plan?")
 
             col_day, col_time = st.columns(2)
-            with col_day: st.radio("Day", ["☀️ Today", "📅 Tomorrow"], key="day_choice", horizontal=True, label_visibility="collapsed")
-            with col_time: st.radio("Time", ["☀️ Daytime", "🌙 Night"], key="time_choice", horizontal=True, label_visibility="collapsed")
-            intended_time = f"{st.session_state.day_choice} ({st.session_state.time_choice})"
+            day_index = 0 if st.session_state.mem_day == "☀️ Today" else 1
+            time_index = 0 if st.session_state.mem_time == "☀️ Daytime" else 1
+            
+            with col_day: 
+                ui_day = st.radio("Day", ["☀️ Today", "📅 Tomorrow"], index=day_index, horizontal=True, label_visibility="collapsed")
+            with col_time: 
+                ui_time = st.radio("Time", ["☀️ Daytime", "🌙 Night"], index=time_index, horizontal=True, label_visibility="collapsed")
+            
+            intended_time = f"{ui_day} ({ui_time})"
 
             st.write("") 
             col_group, col_vibe = st.columns(2)
-            with col_group: st.selectbox("Who is going?", ["Date", "Family Outing", "Friends", "Solo"], key="group_type")
-            with col_vibe: st.radio("Setting?", ["Doesn't Matter", "Outside", "Inside"], key="vibe", horizontal=True)
+            
+            group_options = ["Date", "Family Outing", "Friends", "Solo"]
+            with col_group: 
+                ui_group = st.selectbox("Who is going?", group_options, index=group_options.index(st.session_state.mem_group))
+            
+            vibe_options = ["Doesn't Matter", "Outside", "Inside"]
+            with col_vibe: 
+                ui_vibe = st.radio("Setting?", vibe_options, index=vibe_options.index(st.session_state.mem_vibe), horizontal=True)
             
             st.write("") 
             col_food, col_dist = st.columns(2)
-            with col_food: st.selectbox("Sustenance?", ["Full Meal", "Just Drinks/Coffee", "No Food Needed"], key="food_pref")
-            with col_dist: st.slider("Max Distance (Miles)", 1, 20, 5, key="dist")
+            
+            food_options = ["Full Meal", "Just Drinks/Coffee", "No Food Needed"]
+            with col_food: 
+                ui_food = st.selectbox("Sustenance?", food_options, index=food_options.index(st.session_state.mem_food))
+            with col_dist: 
+                ui_dist = st.slider("Max Distance (Miles)", 1, 20, st.session_state.mem_dist)
 
             with st.expander("Need something specific? (Optional)", expanded=False):
-                st.text_input("Keyword", key="specific", placeholder="e.g., 'live jazz', 'vegan options'", label_visibility="collapsed")
+                ui_spec = st.text_input("Keyword", value=st.session_state.mem_spec, placeholder="e.g., 'live jazz', 'vegan options'", label_visibility="collapsed")
 
             st.write("---")
             
@@ -442,14 +455,24 @@ else:
             with btn_col2: get_wild_clicked = st.button("🎲 GET WILD", type="primary", use_container_width=True)
 
             if top_3_clicked or get_wild_clicked:
-                if not st.session_state.loc_input and not gps_active:
+                if not ui_loc and not gps_active:
                     st.warning("Please enter a location or click the GPS icon first!")
                 else:
+                    # Save current UI state into secure memory
+                    st.session_state.mem_loc = ui_loc
+                    st.session_state.mem_day = ui_day
+                    st.session_state.mem_time = ui_time
+                    st.session_state.mem_group = ui_group
+                    st.session_state.mem_vibe = ui_vibe
+                    st.session_state.mem_food = ui_food
+                    st.session_state.mem_dist = ui_dist
+                    st.session_state.mem_spec = ui_spec
+                    
                     st.session_state.current_mode = "get_wild" if get_wild_clicked else "top_3"
                     st.session_state.filters_dict = {
-                        "group": st.session_state.group_type, "time": intended_time, 
-                        "vibe": st.session_state.vibe, "food": st.session_state.food_pref, 
-                        "specific": st.session_state.specific
+                        "group": ui_group, "time": intended_time, 
+                        "vibe": ui_vibe, "food": ui_food, 
+                        "specific": ui_spec
                     }
                     st.session_state.search_active = True
                     st.session_state.trigger_fetch = True
@@ -460,7 +483,6 @@ else:
 
         # --- SCREEN 2: THE RESULTS & LOADER ---
         else:
-            # Trigger Auto-Scroll Instantly
             scroll_to_top()
             
             if st.button("← Start a Fresh Search"):
@@ -476,23 +498,23 @@ else:
                 status_loader.info("📍 Locking in coordinates...")
                 
                 try:
-                    location_context = st.session_state.loc_input
+                    location_context = st.session_state.mem_loc
                     
                     if st.session_state.gps_active:
                         lat, lng = st.session_state.geo_data['latitude'], st.session_state.geo_data['longitude']
                         location_context = "exact GPS coordinates"
                     else:
-                        lat, lng = get_coordinates(st.session_state.loc_input)
+                        lat, lng = get_coordinates(st.session_state.mem_loc)
                     
                     if lat is None: 
                         status_loader.error("Couldn't find that location.")
                     else:
-                        target_date_str, relative_day = get_local_target_date(lat, lng, st.session_state.day_choice)
+                        target_date_str, relative_day = get_local_target_date(lat, lng, st.session_state.mem_day)
                         semantic_query = build_semantic_query(st.session_state.filters_dict, user_profile)
                         
                         status_loader.info("☁️ Curating local weather, places, and events...")
                         weather_report, raw_places, live_events_data = asyncio.run(
-                            gather_all_data(lat, lng, semantic_query, st.session_state.dist, st.session_state.loc_input, st.session_state.filters_dict['time'], st.session_state.filters_dict['group'], target_date_str, relative_day)
+                            gather_all_data(lat, lng, semantic_query, st.session_state.mem_dist, st.session_state.mem_loc, st.session_state.filters_dict['time'], st.session_state.filters_dict['group'], target_date_str, relative_day)
                         )
                         
                         if st.session_state.current_mode == "get_wild":
@@ -518,7 +540,8 @@ else:
                         else:
                             status_loader.success("✅ Itinerary Ready!")
                 except Exception as e: 
-                    status_loader.error(f"Error connecting to the wild. Ensure coordinates and network are active. ({e})")
+                    error_type = type(e).__name__
+                    status_loader.error(f"Error connecting to the wild. Try again! ({error_type})")
 
             if st.session_state.current_results:
                 st.write("---")
@@ -547,7 +570,7 @@ else:
                 
                 # --- RENDER CARDS ---
                 for index, spot in enumerate(results.get("recommendations", [])):
-                    render_spot_card(spot, st.session_state.loc_input, st.session_state.user.id, index + 1, mode)
+                    render_spot_card(spot, st.session_state.mem_loc, st.session_state.user.id, index + 1, mode)
                     
                 # --- SHUFFLE BUTTON (ONLY IN TOP 3 MODE) ---
                 if mode == "top_3":
@@ -580,6 +603,17 @@ else:
                     'needs_stroller_access': stroller, 'needs_dog_friendly': dog, 'vibe_preference': vibe_pref
                 }).execute()
                 st.success("Your preferences have been locked in.")
+                
+        # NEW: Log Out button moved safely to the bottom of the profile tab
+        st.write("---")
+        if st.button("🚪 Log Out", type="secondary"):
+            supabase.auth.sign_out()
+            st.session_state.user = None
+            st.session_state.current_results = None
+            st.session_state.session_seen_spots = []
+            st.session_state.search_active = False
+            st.session_state.trigger_fetch = False
+            st.rerun()
 
     with tab_saved:
         st.subheader("Your Adventure Ledger")
@@ -600,7 +634,6 @@ else:
                         new_rating = st.slider("Rate this spot (1-5 Stars. 1 = Blacklist)", 1, 5, current_rating)
                         notes = st.text_input("Private Notes", value=saved.get('user_notes', ''))
                         
-                        # Added the Delete Button directly inside the update form columns
                         col_update, col_del = st.columns(2)
                         with col_update:
                             update_btn = st.form_submit_button("Update Feedback", type="primary")
