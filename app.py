@@ -60,7 +60,6 @@ custom_css = """
 st.markdown(custom_css, unsafe_allow_html=True)
 
 def scroll_to_top():
-    """Injects a tiny JS snippet to instantly force the UI back to the top of the page."""
     components.html(
         """
         <script>
@@ -81,7 +80,6 @@ if 'session_seen_spots' not in st.session_state: st.session_state.session_seen_s
 if 'search_active' not in st.session_state: st.session_state.search_active = False
 if 'trigger_fetch' not in st.session_state: st.session_state.trigger_fetch = False
 
-# Setup default form values so they can be remembered
 if 'loc_input' not in st.session_state: st.session_state.loc_input = ""
 if 'day_choice' not in st.session_state: st.session_state.day_choice = "☀️ Today"
 if 'time_choice' not in st.session_state: st.session_state.time_choice = "🌙 Night"
@@ -118,22 +116,30 @@ def save_spot_to_db(user_id, name, address, category, rating=None, notes=""):
             st.toast("🚫 Blacklisted. We won't recommend this again.")
     except Exception as e: st.error("Database error.")
 
+def delete_spot_from_db(spot_id):
+    try:
+        supabase.table('saved_spots').delete().eq('id', spot_id).execute()
+        st.toast("🗑️ Spot permanently deleted.")
+    except Exception as e: st.error("Database error while deleting.")
+
 # ==========================================
 # 4. HELPER FUNCTIONS (The Engine)
 # ==========================================
 def get_coordinates(location_query):
     url = f"https://maps.googleapis.com/maps/api/geocode/json?address={location_query}&key={GOOGLE_API_KEY}"
-    response = requests.get(url).json()
-    if response['status'] == 'OK':
-        loc = response['results'][0]['geometry']['location']
-        return loc['lat'], loc['lng']
+    try:
+        response = requests.get(url, timeout=10).json()
+        if response['status'] == 'OK':
+            loc = response['results'][0]['geometry']['location']
+            return loc['lat'], loc['lng']
+    except: pass
     return None, None
 
 def get_local_target_date(lat, lng, day_choice):
     timestamp = int(time.time())
     url = f"https://maps.googleapis.com/maps/api/timezone/json?location={lat},{lng}&timestamp={timestamp}&key={GOOGLE_API_KEY}"
     try:
-        res = requests.get(url).json()
+        res = requests.get(url, timeout=10).json()
         if res['status'] == 'OK':
             local_timestamp = timestamp + res['dstOffset'] + res['rawOffset']
             local_time = datetime.utcfromtimestamp(local_timestamp)
@@ -151,12 +157,11 @@ def get_local_target_date(lat, lng, day_choice):
 def get_live_weather(lat, lng):
     try:
         url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lng}&units=imperial&appid={OPENWEATHER_API_KEY}"
-        res = requests.get(url).json()
+        res = requests.get(url, timeout=10).json()
         if res.get("cod") == 200:
             return f"{res['main']['temp']}°F and {res['weather'][0]['description']}"
-        return "Weather data unavailable."
-    except:
-        return "Weather service currently unreachable."
+    except: pass
+    return "Weather data unavailable."
 
 def build_semantic_query(filters_dict, profile):
     modifiers = []
@@ -183,7 +188,6 @@ def build_semantic_query(filters_dict, profile):
             
     return f"{modifier_str} {base}".strip()
 
-# Removed the cache decorator to fix the Threading/Session crash
 def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
     url = "https://places.googleapis.com/v1/places:searchText"
     headers = {
@@ -197,17 +201,19 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
         "pageSize": 20,
         "locationBias": {"circle": {"center": {"latitude": lat, "longitude": lng}, "radius": radius_meters}}
     }
-    response = requests.post(url, headers=headers, json=data)
-    if response.status_code != 200: raise Exception(f"Google API Error: {response.text}")
-    return response.json().get('places', [])
+    try:
+        response = requests.post(url, headers=headers, json=data, timeout=15)
+        if response.status_code == 200:
+            return response.json().get('places', [])
+    except: pass
+    return []
 
-# Removed the cache decorator to fix the Threading/Session crash
 def fetch_live_events(location_name, intended_time, group_type, target_date_str, relative_day):
     url = "https://api.tavily.com/search"
     query = f"Find events, live music, festivals, or pop-ups happening EXACTLY {relative_day}, {target_date_str}, in {location_name}. Ignore any events happening on other dates."
     payload = {"api_key": TAVILY_API_KEY, "query": query, "search_depth": "basic", "include_answer": True, "max_results": 3}
     try:
-        response = requests.post(url, json=payload)
+        response = requests.post(url, json=payload, timeout=15)
         data = response.json()
         return f"LIVE WEB SEARCH SUMMARY: {data.get('answer', '')}"
     except: return "No live event data found."
@@ -264,7 +270,7 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"GOOGLE PLACES DATA: {json.dumps(trimmed_places)}\n\nLIVE WEB SEARCH EVENTS:\n{safe_events_data}"}
         ],
-        max_tokens=1000 
+        max_tokens=2500 # INCREASED MASSIVELY: Prevents the JSONDecodeError / cutoff issue
     )
     
     raw_content = response.choices[0].message.content.strip()
@@ -400,7 +406,6 @@ else:
         if not st.session_state.search_active:
             st.subheader("Where are we going?")
             loc_col1, loc_col2 = st.columns([5, 1])
-            # Bind inputs to session_state using the key parameter
             with loc_col1: st.text_input("Location", key="loc_input", placeholder="Enter City or ZIP Code", label_visibility="collapsed")
             with loc_col2: geo_data = streamlit_geolocation()
 
@@ -455,7 +460,7 @@ else:
 
         # --- SCREEN 2: THE RESULTS & LOADER ---
         else:
-            # Inject the Auto-Scroll Component
+            # Trigger Auto-Scroll Instantly
             scroll_to_top()
             
             if st.button("← Start a Fresh Search"):
@@ -513,8 +518,7 @@ else:
                         else:
                             status_loader.success("✅ Itinerary Ready!")
                 except Exception as e: 
-                    error_type = type(e).__name__
-                    status_loader.error(f"Error connecting to the wild. ({error_type}: {e})")
+                    status_loader.error(f"Error connecting to the wild. Ensure coordinates and network are active. ({e})")
 
             if st.session_state.current_results:
                 st.write("---")
@@ -590,10 +594,24 @@ else:
                 icon = "🚫" if saved['rating'] == 1 else "📍"
                 with st.expander(f"{icon} {saved['spot_name']}"):
                     st.caption(saved['address'])
+                    
                     with st.form(f"rate_form_{saved['id']}"):
                         current_rating = saved['rating'] if saved['rating'] else 3
                         new_rating = st.slider("Rate this spot (1-5 Stars. 1 = Blacklist)", 1, 5, current_rating)
                         notes = st.text_input("Private Notes", value=saved.get('user_notes', ''))
-                        if st.form_submit_button("Update Feedback"):
+                        
+                        # Added the Delete Button directly inside the update form columns
+                        col_update, col_del = st.columns(2)
+                        with col_update:
+                            update_btn = st.form_submit_button("Update Feedback", type="primary")
+                        with col_del:
+                            delete_btn = st.form_submit_button("🗑️ Delete Spot")
+                        
+                        if update_btn:
                             supabase.table('saved_spots').update({'rating': new_rating, 'user_notes': notes}).eq('id', saved['id']).execute()
                             st.success("Feedback saved!")
+                            st.rerun()
+                            
+                        if delete_btn:
+                            delete_spot_from_db(saved['id'])
+                            st.rerun()
