@@ -89,7 +89,6 @@ def save_spot_to_db(user_id, name, address, category, rating=None, notes=""):
 # 4. HELPER FUNCTIONS (The Engine)
 # ==========================================
 def get_coordinates(location_query):
-    # FIX: Properly URL-encode the location (spaces, zip codes, etc.)
     encoded_query = urllib.parse.quote(str(location_query))
     url = f"https://maps.googleapis.com/maps/api/geocode/json?address={encoded_query}&key={GOOGLE_API_KEY}"
     response = requests.get(url, timeout=10).json()
@@ -97,6 +96,9 @@ def get_coordinates(location_query):
     if response['status'] == 'OK' and len(response['results']) > 0:
         loc = response['results'][0]['geometry']['location']
         return loc['lat'], loc['lng']
+    # NEW: Catch the specific Google Cloud Permission Error
+    elif response['status'] == 'REQUEST_DENIED':
+        st.error(f"🚨 Google Geocoding API Error: {response.get('error_message', 'You need to enable the Geocoding API in Google Cloud Console.')}")
     return None, None
 
 def get_live_weather(lat, lng):
@@ -217,7 +219,6 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"GOOGLE PLACES DATA: {json.dumps(trimmed_places)}\n\nLIVE WEB SEARCH EVENTS:\n{safe_events_data}"}
         ],
-        # FIX: Bumped up token limit to allow the AI to finish the JSON object for all 3 spots
         max_tokens=1200
     )
     return json.loads(response.choices[0].message.content)
@@ -360,14 +361,18 @@ else:
                 with st.spinner("Scouting the wild..."):
                     try:
                         current_date = datetime.now().strftime("%A, %B %d, %Y")
-                        location_context = location_input
-                        if gps_active:
+                        
+                        # NEW FIX: The text box (location_input) now overrides the GPS if both are present
+                        if location_input:
+                            lat, lng = get_coordinates(location_input)
+                            location_context = location_input
+                        elif gps_active:
                             lat, lng = geo_data['latitude'], geo_data['longitude']
                             location_context = "exact GPS coordinates"
                         else:
-                            lat, lng = get_coordinates(location_input)
+                            lat, lng = None, None
                         
-                        if lat is None: st.error("Couldn't find that location.")
+                        if lat is None: st.error("Couldn't find that location. (Check your Google API error messages above if present).")
                         else:
                             weather_report = get_live_weather(lat, lng)
                             st.info(f"🌡️ Weather Check: {weather_report}")
