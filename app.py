@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import json
 import urllib.parse
+from tenacity import retry, wait_exponential, stop_after_attempt
 from openai import OpenAI
 from datetime import datetime
 from streamlit_geolocation import streamlit_geolocation
@@ -149,6 +150,8 @@ def fetch_live_events(location_name, intended_time, group_type, current_date):
         return f"TAVILY AI WEB SEARCH SUMMARY: {data.get('answer', '')}"
     except: return "No live event data found."
 
+# V8.1 UPDATE: Added @retry to handle 429 Rate Limit errors automatically
+@retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3))
 def get_ai_recommendations(raw_places, live_events_data, filters_dict, location_name, current_date, profile, disliked_spots, mode="top_3"):
     client = OpenAI(api_key=OPENAI_API_KEY)
     
@@ -193,13 +196,15 @@ def get_ai_recommendations(raw_places, live_events_data, filters_dict, location_
     'name', 'category', 'address', 'why_its_perfect' (2 sentences), 'vibe_check' (3 words), 'website' (URL if available in data, otherwise empty string), and 'photo_ref' (The string from places.photos[0].name if available, otherwise empty).
     """
 
+    # V8.1 UPDATE: Added max_tokens=450 to prevent hitting rate limits during high usage
     response = client.chat.completions.create(
         model="gpt-4o",
         response_format={ "type": "json_object" },
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"GOOGLE PLACES DATA: {json.dumps(raw_places)}\n\nLIVE WEB SEARCH EVENTS:\n{live_events_data}"}
-        ]
+        ],
+        max_tokens=450 
     )
     return json.loads(response.choices[0].message.content)
 
