@@ -150,8 +150,12 @@ def fetch_live_events(location_name, intended_time, group_type, current_date):
         return f"TAVILY AI WEB SEARCH SUMMARY: {data.get('answer', '')}"
     except: return "No live event data found."
 
-# V8.1 UPDATE: Added @retry to handle 429 Rate Limit errors automatically
-@retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3))
+# V8.2 UPDATE: Increased retries and switched to GPT-4o-Mini to bypass hard rate limits
+@retry(
+    wait=wait_exponential(min=2, max=30), # Waits longer (up to 30s) between tries
+    stop=stop_after_attempt(6),           # Tries 6 times instead of 3
+    reraise=True                          # Ensures we see the final error if it still fails
+)
 def get_ai_recommendations(raw_places, live_events_data, filters_dict, location_name, current_date, profile, disliked_spots, mode="top_3"):
     client = OpenAI(api_key=OPENAI_API_KEY)
     
@@ -196,15 +200,16 @@ def get_ai_recommendations(raw_places, live_events_data, filters_dict, location_
     'name', 'category', 'address', 'why_its_perfect' (2 sentences), 'vibe_check' (3 words), 'website' (URL if available in data, otherwise empty string), and 'photo_ref' (The string from places.photos[0].name if available, otherwise empty).
     """
 
-    # V8.1 UPDATE: Added max_tokens=450 to prevent hitting rate limits during high usage
+# V8.2 CHANGE: Switched model to "gpt-4o-mini"
+    # This model is much more resilient to 429 errors when your account is at its limit.
     response = client.chat.completions.create(
-        model="gpt-4o",
+        model="gpt-4o-mini", 
         response_format={ "type": "json_object" },
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"GOOGLE PLACES DATA: {json.dumps(raw_places)}\n\nLIVE WEB SEARCH EVENTS:\n{live_events_data}"}
+            {"role": "user", "content": f"DATA: {json.dumps(raw_places)}\n\nEVENTS: {live_events_data}"}
         ],
-        max_tokens=450 
+        max_tokens=400 # Slightly lower to be even safer
     )
     return json.loads(response.choices[0].message.content)
 
