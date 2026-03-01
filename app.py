@@ -63,6 +63,10 @@ if 'current_results' not in st.session_state: st.session_state.current_results =
 if 'current_mode' not in st.session_state: st.session_state.current_mode = None
 if 'session_seen_spots' not in st.session_state: st.session_state.session_seen_spots = []
 
+# --- NEW: State variables to control the dynamic shuffle flow ---
+if 'trigger_search' not in st.session_state: st.session_state.trigger_search = False
+if 'is_shuffle' not in st.session_state: st.session_state.is_shuffle = False
+
 def get_profile(user_id):
     try:
         res = supabase.table('user_profiles').select('*').eq('id', user_id).execute()
@@ -217,7 +221,7 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"GOOGLE PLACES DATA: {json.dumps(trimmed_places)}\n\nLIVE WEB SEARCH EVENTS:\n{safe_events_data}"}
         ],
-        max_tokens=1000  # Bumped to 1000 to completely prevent the blank JSON truncation error
+        max_tokens=1000 
     )
     return json.loads(response.choices[0].message.content)
 
@@ -227,7 +231,6 @@ def render_spot_card(spot, location_input, user_id):
     encoded_address = urllib.parse.quote(spot['address'])
     uber_url = f"https://m.uber.com/ul/?action=setPickup&pickup=my_location&dropoff[formatted_address]={encoded_address}"
     
-    # Generate native Share Links
     raw_share_text = f"Let's go to {spot['name']}!\n📍 {spot['address']}\n🗺️ {map_url}"
     encoded_share = urllib.parse.quote(raw_share_text)
     sms_url = f"sms:?&body={encoded_share}"
@@ -331,6 +334,8 @@ else:
             st.session_state.user = None
             st.session_state.current_results = None
             st.session_state.session_seen_spots = []
+            st.session_state.trigger_search = False
+            st.session_state.is_shuffle = False
             st.rerun()
             
     tab_explore, tab_profile, tab_saved = st.tabs(["🌍 Explore", "👤 My Profile", "⭐ Saved Spots"])
@@ -373,63 +378,72 @@ else:
 
         st.write("---")
         
-        btn_col1, btn_col2, btn_col3 = st.columns(3)
+        # UI: Core Buttons (No permanent shuffle button here!)
+        btn_col1, btn_col2 = st.columns(2)
         with btn_col1: top_3_clicked = st.button("🌟 Top 3 Recommendations", use_container_width=True)
         with btn_col2: get_wild_clicked = st.button("🎲 GET WILD", type="primary", use_container_width=True)
-        with btn_col3: shuffle_clicked = st.button("🔀 Shuffle Options", use_container_width=True)
 
-        if top_3_clicked or get_wild_clicked or shuffle_clicked:
-            if shuffle_clicked and not st.session_state.session_seen_spots:
-                st.warning("Nothing to shuffle yet! Start by finding your first spots.")
+        if top_3_clicked:
+            st.session_state.trigger_search = True
+            st.session_state.is_shuffle = False
+            st.session_state.current_mode = "top_3"
+        elif get_wild_clicked:
+            st.session_state.trigger_search = True
+            st.session_state.is_shuffle = False
+            st.session_state.current_mode = "get_wild"
+
+        if st.session_state.trigger_search:
+            st.session_state.trigger_search = False # Instantly reset the trigger
+            
+            if not st.session_state.is_shuffle:
+                # If they clicked the primary buttons, clear the shuffle memory for a fresh search!
+                st.session_state.session_seen_spots = []
+                
+            if not location_input and not gps_active:
+                st.warning("Please enter a location or click the GPS icon first!")
             else:
-                mode = "get_wild" if get_wild_clicked or (shuffle_clicked and st.session_state.current_mode == "get_wild") else "top_3"
-                if not location_input and not gps_active:
-                    st.warning("Please enter a location or click the GPS icon first!")
-                else:
-                    with st.status("Scouting the wild...", expanded=True) as status:
-                        try:
-                            current_date = datetime.now().strftime("%A, %B %d, %Y")
-                            location_context = location_input
+                with st.status("Scouting the wild...", expanded=True) as status:
+                    try:
+                        current_date = datetime.now().strftime("%A, %B %d, %Y")
+                        location_context = location_input
+                        
+                        st.write("📍 Getting coordinates...")
+                        if gps_active:
+                            lat, lng = geo_data['latitude'], geo_data['longitude']
+                            location_context = "exact GPS coordinates"
+                        else:
+                            lat, lng = get_coordinates(location_input)
+                        
+                        if lat is None: 
+                            st.error("Couldn't find that location.")
+                            status.update(label="Location Error", state="error")
+                        else:
+                            st.write("☁️ Fetching live weather, places, and local events...")
+                            semantic_query = build_semantic_query(filters_dict, user_profile)
                             
-                            st.write("📍 Getting coordinates...")
-                            if gps_active:
-                                lat, lng = geo_data['latitude'], geo_data['longitude']
-                                location_context = "exact GPS coordinates"
-                            else:
-                                lat, lng = get_coordinates(location_input)
+                            weather_report, raw_places, live_events_data = asyncio.run(
+                                gather_all_data(lat, lng, semantic_query, distance, location_input, intended_time, group_type, current_date)
+                            )
                             
-                            if lat is None: 
-                                st.error("Couldn't find that location.")
-                                status.update(label="Location Error", state="error")
-                            else:
-                                st.write("☁️ Fetching live weather, places, and local events...")
-                                semantic_query = build_semantic_query(filters_dict, user_profile)
-                                
-                                weather_report, raw_places, live_events_data = asyncio.run(
-                                    gather_all_data(lat, lng, semantic_query, distance, location_input, intended_time, group_type, current_date)
-                                )
-                                
-                                st.write("🧠 The AI is assembling your perfect itinerary...")
-                                
-                                db_excluded = get_excluded_spots(st.session_state.user.id)
-                                all_excluded = list(set(db_excluded + st.session_state.session_seen_spots))
-                                
-                                st.session_state.current_results = get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_context, current_date, user_profile, all_excluded, mode=mode)
-                                st.session_state.current_mode = mode
-                                
-                                for rec in st.session_state.current_results.get("recommendations", []):
-                                    st.session_state.session_seen_spots.append(rec['name'])
+                            st.write("🧠 The AI is assembling your perfect itinerary...")
+                            
+                            db_excluded = get_excluded_spots(st.session_state.user.id)
+                            all_excluded = list(set(db_excluded + st.session_state.session_seen_spots))
+                            
+                            st.session_state.current_results = get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_context, current_date, user_profile, all_excluded, mode=st.session_state.current_mode)
+                            
+                            for rec in st.session_state.current_results.get("recommendations", []):
+                                st.session_state.session_seen_spots.append(rec['name'])
 
-                                status.update(label="Itinerary Ready!", state="complete", expanded=False)
-                        except Exception as e: 
-                            st.error(f"Error communicating with AI. Try shuffling again! ({e})")
-                            status.update(label="An error occurred", state="error")
+                            status.update(label="Itinerary Ready!", state="complete", expanded=False)
+                    except Exception as e: 
+                        st.error(f"Error communicating with AI. ({e})")
+                        status.update(label="An error occurred", state="error")
 
         if st.session_state.current_results:
             st.write("---")
             results = st.session_state.current_results
             
-            # --- EXPANDABLE MAP ---
             map_data = []
             for spot in results.get("recommendations", []):
                 if spot.get('lat') and spot.get('lng'):
@@ -439,10 +453,15 @@ else:
                 with st.expander("🗺️ View on Map"):
                     st.map(pd.DataFrame(map_data), zoom=12)
             
-            # --- RENDER CARDS ---
-            for index, spot in enumerate(results.get("recommendations", [])):
+            for spot in results.get("recommendations", []):
                 render_spot_card(spot, location_input, st.session_state.user.id)
                 st.write("---")
+                
+            # --- THE DYNAMIC SHUFFLE BUTTON ---
+            if st.button("🔀 Not feeling these? Show me 3 different spots", use_container_width=True):
+                st.session_state.trigger_search = True
+                st.session_state.is_shuffle = True
+                st.rerun()
 
     # ----------------------------------------
     # TAB 2 & 3: PROFILE & SAVED SPOTS (Unchanged)
