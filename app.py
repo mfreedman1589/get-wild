@@ -89,18 +89,18 @@ def save_spot_to_db(user_id, name, address, category, rating=None, notes=""):
 # 4. HELPER FUNCTIONS (The Engine)
 # ==========================================
 def get_coordinates(location_query):
-    # Added timeout=10 for Google Maps Geocoding
-    url = f"https://maps.googleapis.com/maps/api/geocode/json?address={location_query}&key={GOOGLE_API_KEY}"
+    # FIX: Properly URL-encode the location (spaces, zip codes, etc.)
+    encoded_query = urllib.parse.quote(str(location_query))
+    url = f"https://maps.googleapis.com/maps/api/geocode/json?address={encoded_query}&key={GOOGLE_API_KEY}"
     response = requests.get(url, timeout=10).json()
-    if response['status'] == 'OK':
+    
+    if response['status'] == 'OK' and len(response['results']) > 0:
         loc = response['results'][0]['geometry']['location']
         return loc['lat'], loc['lng']
     return None, None
 
 def get_live_weather(lat, lng):
-    """Fetches real-time weather using OpenWeatherMap based on geocoordinates."""
     try:
-        # Added timeout=5 for OpenWeatherMap
         url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lng}&units=imperial&appid={OPENWEATHER_API_KEY}"
         res = requests.get(url, timeout=5).json()
         if res.get("cod") == 200:
@@ -147,7 +147,6 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
         "pageSize": 20,
         "locationBias": {"circle": {"center": {"latitude": lat, "longitude": lng}, "radius": radius_meters}}
     }
-    # Added timeout=15 for Google Places
     response = requests.post(url, headers=headers, json=data, timeout=15)
     if response.status_code != 200: raise Exception(f"Google API Error: {response.text}")
     return response.json().get('places', [])
@@ -157,7 +156,6 @@ def fetch_live_events(location_name, intended_time, group_type, current_date):
     query = f"Find specific local events, live music, festivals, trivia nights, or pop-ups happening on {intended_time} strictly in or near {location_name}. Today's date is {current_date}. List exact event names."
     payload = {"api_key": TAVILY_API_KEY, "query": query, "search_depth": "basic", "include_answer": True, "max_results": 3}
     try:
-        # Added timeout=10 for Tavily
         response = requests.post(url, json=payload, timeout=10)
         data = response.json()
         return f"TAVILY AI WEB SEARCH SUMMARY: {data.get('answer', '')}"
@@ -165,10 +163,8 @@ def fetch_live_events(location_name, intended_time, group_type, current_date):
 
 @retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3))
 def get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_name, current_date, profile, disliked_spots, mode="top_3"):
-    # Set the timeout to 30 seconds directly on the OpenAI client instantiation
     client = OpenAI(api_key=OPENAI_API_KEY, timeout=30.0)
     
-    # Payload Trim
     trimmed_places = raw_places[:8] if isinstance(raw_places, list) and len(raw_places) > 8 else raw_places
     safe_events_data = live_events_data[:4000] if isinstance(live_events_data, str) else live_events_data
 
@@ -221,7 +217,8 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"GOOGLE PLACES DATA: {json.dumps(trimmed_places)}\n\nLIVE WEB SEARCH EVENTS:\n{safe_events_data}"}
         ],
-        max_tokens=450
+        # FIX: Bumped up token limit to allow the AI to finish the JSON object for all 3 spots
+        max_tokens=1200
     )
     return json.loads(response.choices[0].message.content)
 
@@ -383,13 +380,14 @@ else:
                             st.session_state.current_results = get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_context, current_date, user_profile, disliked_spots, mode=mode)
                             st.session_state.current_mode = mode
                             
-                    # Explicit Error Catching
+                    except json.decoder.JSONDecodeError:
+                        st.error("🚨 **AI Response Cut Off.** The AI ran out of tokens before finishing the response. Please try clicking the button again.")
                     except Exception as e: 
                         error_msg = str(e).lower()
                         if "429" in error_msg or "rate limit" in error_msg or "too large" in error_msg:
-                            st.error("🚨 **OpenAI Rate Limit Exceeded (429).** The data payload was still too large for your current Tokens-Per-Minute limit. Try reducing the search radius or we can trim the Google Places data further in the code.")
+                            st.error("🚨 **OpenAI Rate Limit Exceeded (429).** The data payload was still too large. Try reducing the search radius.")
                         elif "timeout" in error_msg:
-                            st.error("⏳ **Request Timed Out.** One of the APIs (Google, Tavily, or OpenAI) took too long to respond. Please try again.")
+                            st.error("⏳ **Request Timed Out.** One of the APIs took too long to respond. Please try again.")
                         else:
                             st.error(f"Error: {e}")
 
