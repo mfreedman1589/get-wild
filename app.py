@@ -91,7 +91,7 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
     data = {
         "textQuery": semantic_query,
         "pageSize": 20,
-        "locationRestriction": {
+        "locationBias": {            # <--- THE FIX
             "circle": {
                 "center": {"latitude": lat, "longitude": lng},
                 "radius": radius_meters
