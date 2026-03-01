@@ -18,65 +18,19 @@ st.set_page_config(page_title="Get Wild", page_icon="🌿", layout="centered")
 
 custom_css = """
 <style>
-    .hero-header {
-        text-align: center;
-        padding: 2rem 0 1rem 0;
-    }
-    .hero-title {
-        color: #2e7d32;
-        font-family: 'Helvetica Neue', sans-serif;
-        font-size: 3.5rem;
-        font-weight: 800;
-        letter-spacing: -1px;
-        text-transform: uppercase;
-        margin-bottom: 0;
-        line-height: 1.1;
-    }
-    .hero-subtitle {
-        color: #558b2f;
-        font-size: 1.2rem;
-        font-weight: 400;
-        letter-spacing: 1px;
-        margin-top: 10px;
-    }
-    .take-me-there-btn {
-        display: inline-block;
-        background-color: #2e7d32;
-        color: white !important;
-        text-align: center;
-        padding: 12px 24px;
-        border-radius: 8px;
-        text-decoration: none;
-        font-weight: 600;
-        letter-spacing: 0.5px;
-        width: 100%;
-        transition: all 0.3s ease;
-        margin-top: 10px;
-    }
-    .take-me-there-btn:hover {
-        background-color: #1b5e20;
-        box-shadow: 0 4px 12px rgba(46, 125, 50, 0.3);
-    }
-    .wild-card {
-        background: linear-gradient(135deg, #f1f8e9 0%, #dcedc8 100%);
-        border-left: 6px solid #558b2f;
-        border-radius: 12px;
-        padding: 25px;
-        margin-top: 20px;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.08);
-        animation: fadeSlideUp 0.8s ease-out forwards;
-        opacity: 0;
-        transform: translateY(20px);
-    }
-    @keyframes fadeSlideUp {
-        to { opacity: 1; transform: translateY(0); }
-    }
+    .hero-header { text-align: center; padding: 2rem 0 1rem 0; }
+    .hero-title { color: #2e7d32; font-family: 'Helvetica Neue', sans-serif; font-size: 3.5rem; font-weight: 800; letter-spacing: -1px; text-transform: uppercase; margin-bottom: 0; line-height: 1.1; }
+    .hero-subtitle { color: #558b2f; font-size: 1.2rem; font-weight: 400; letter-spacing: 1px; margin-top: 10px; }
+    .take-me-there-btn { display: inline-block; background-color: #2e7d32; color: white !important; text-align: center; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; letter-spacing: 0.5px; width: 100%; transition: all 0.3s ease; margin-top: 10px; }
+    .take-me-there-btn:hover { background-color: #1b5e20; box-shadow: 0 4px 12px rgba(46, 125, 50, 0.3); }
+    .wild-card { background: linear-gradient(135deg, #f1f8e9 0%, #dcedc8 100%); border-left: 6px solid #558b2f; border-radius: 12px; padding: 25px; margin-top: 20px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); animation: fadeSlideUp 0.8s ease-out forwards; opacity: 0; transform: translateY(20px); }
+    @keyframes fadeSlideUp { to { opacity: 1; transform: translateY(0); } }
 </style>
 """
 st.markdown(custom_css, unsafe_allow_html=True)
 
 # ==========================================
-# 3. HELPER FUNCTIONS (The Engine)
+# 3. HELPER FUNCTIONS (The Engine & Matrix)
 # ==========================================
 def get_coordinates(location_query):
     url = f"https://maps.googleapis.com/maps/api/geocode/json?address={location_query}&key={GOOGLE_API_KEY}"
@@ -86,16 +40,70 @@ def get_coordinates(location_query):
         return loc['lat'], loc['lng']
     return None, None
 
-def fetch_local_places(lat, lng, radius_miles):
+def get_dynamic_place_types(food_pref, group_type, vibe):
+    """THE MATRIX STEP 1: Dynamically changes what we ask Google for based on filters."""
+    types = []
+    
+    if food_pref == "Full Meal":
+        types.extend(["restaurant", "seafood_restaurant", "steak_house"])
+    elif food_pref == "Just Drinks/Coffee":
+        types.extend(["bar", "cafe", "coffee_shop", "brewery", "wine_bar"])
+    elif food_pref == "No Food Needed":
+        types.extend(["park", "museum", "tourist_attraction", "hiking_area", "bowling_alley", "movie_theater"])
+        
+    if group_type == "Family Outing":
+        types.extend(["zoo", "aquarium", "amusement_park"])
+        
+    if vibe == "Outside":
+        types.extend(["park", "brewery"]) # Breweries often have large outdoor spaces
+        
+    # Fallback to broad search if types is somehow empty
+    if not types:
+        types = ["restaurant", "bar", "park", "tourist_attraction"]
+        
+    # Remove duplicates and return
+    return list(set(types))
+
+def build_contextual_rules(group_type, intended_time, vibe, food_pref):
+    """THE MATRIX STEP 2: Generates strict psychological rules for the AI."""
+    rules = []
+    is_night = "Night" in intended_time or "Tonight" in intended_time
+    
+    # 1. Who is going?
+    if group_type == "Date":
+        if is_night:
+            rules.append("- DATE (NIGHT) MANDATE: Must be romantic, intimate, dimly lit, cozy, or an upscale experience. No loud sports bars or chaotic family venues.")
+        else:
+            rules.append("- DATE (DAY) MANDATE: Must be a cute, scenic, aesthetic, and relaxed environment for a daytime date.")
+    elif group_type == "Family Outing":
+        rules.append("- FAMILY MANDATE: Must be explicitly kid-friendly, safe, and family-welcoming. STRICTLY EXCLUDE rowdy bars, nightclubs, or 21+ only venues.")
+    elif group_type == "Friends":
+        rules.append("- FRIENDS MANDATE: Focus on lively, group-friendly, fun, or interactive spots with great energy (e.g., trivia, breweries, group seating).")
+    elif group_type == "Solo":
+        if vibe == "Outside" and is_night:
+            rules.append("- SOLO (NIGHT/OUTSIDE) MANDATE: Focus on safe, comfortable-for-one spots like a sleek rooftop bar, a quiet patio, or an engaging solo experience.")
+        else:
+            rules.append("- SOLO MANDATE: Focus on spots welcoming to solo adventurers (e.g., bar seating, peaceful environments, or self-guided pacing).")
+            
+    # 2. Outdoor Enforcer
+    if vibe == "Outside":
+        if food_pref in ["Full Meal", "Just Drinks/Coffee"]:
+            rules.append("- OUTDOOR DINING MANDATE: The venue MUST be renowned for its outdoor infrastructure (a sprawling patio, rooftop bar, waterfront view, or beer garden). Do NOT pick a standard indoor restaurant that just happens to have two sidewalk tables.")
+        else:
+            rules.append("- OUTDOOR MANDATE: Must be primarily an outdoor venue, park, or experience.")
+            
+    return "\n".join(rules)
+
+def fetch_local_places(lat, lng, radius_miles, dynamic_types):
     radius_meters = int(radius_miles * 1609.34)
     url = "https://places.googleapis.com/v1/places:searchNearby"
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": GOOGLE_API_KEY,
-        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.types"
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.types,places.regularOpeningHours"
     }
     data = {
-        "includedTypes": ["restaurant", "bar", "cafe", "park", "tourist_attraction", "museum", "bowling_alley", "hiking_area"],
+        "includedTypes": dynamic_types,
         "maxResultCount": 20,
         "locationRestriction": {
             "circle": {"center": {"latitude": lat, "longitude": lng}, "radius": radius_meters}
@@ -104,8 +112,16 @@ def fetch_local_places(lat, lng, radius_miles):
     response = requests.post(url, headers=headers, json=data)
     return response.json().get('places', [])
 
-def get_ai_recommendations(raw_places, user_filters, intended_time, location_name, mode="top_3"):
+def get_ai_recommendations(raw_places, filters_dict, location_name, mode="top_3"):
     client = OpenAI(api_key=OPENAI_API_KEY)
+    
+    group_type = filters_dict['group']
+    intended_time = filters_dict['time']
+    vibe = filters_dict['vibe']
+    food_pref = filters_dict['food']
+    
+    # Inject the Matrix logic
+    contextual_rules = build_contextual_rules(group_type, intended_time, vibe, food_pref)
     
     if mode == "get_wild":
         instruction = """
@@ -116,9 +132,9 @@ def get_ai_recommendations(raw_places, user_filters, intended_time, location_nam
     else:
         instruction = """
         You must return EXACTLY 3 options, strictly following this architectural structure:
-        1. The Crowd-Pleaser: An established, highly-rated, popular, and "safe" choice.
-        2. The Fresh Take / Live Event: Something newer, trending, or event-driven. IF you select a music venue or stadium, explicitly state that the user needs to check tonight's specific event schedule.
-        3. The Hidden Gem (EXPERIENTIAL): This MUST be an experiential or geographically secluded destination. DO NOT just pick a restaurant with a unique menu. Pick something truly off the beaten path (e.g., a hidden speakeasy, an immersive activity, a quirky local landmark).
+        1. The Crowd-Pleaser: An established, highly-rated, popular, and "safe" choice matching the vibe.
+        2. The Fresh Take / Live Event: Something newer, trending, or event-driven.
+        3. The Hidden Gem (EXPERIENTIAL): Pick something truly off the beaten path or unique that actually exists in the data provided.
         
         Assign the exact category name to each option in your JSON response.
         """
@@ -128,20 +144,24 @@ def get_ai_recommendations(raw_places, user_filters, intended_time, location_nam
     
     CRITICAL CONTEXT:
     - Searching near: {location_name}
-    - The user intends to go: {intended_time}
+    - Intended Time: {intended_time}
     
-    STRICT FILTER ADHERENCE RULES:
-    You must ruthlessly apply the user's filters: {user_filters}
-    - IF 'Outside' is selected: The location MUST have a primary outdoor focus. 
-    - IF 'Outside' AND 'Food' are selected: Do NOT recommend an empty park. Recommend a venue with significant outdoor dining space, a rooftop, or a park explicitly known for having food trucks/concessions.
-    - IF 'Inside' is selected: Do not recommend parks or fully outdoor venues.
+    ANTI-HALLUCINATION PROTOCOL (MANDATORY):
+    1. You MUST ONLY recommend real places from the 'AVAILABLE PLACES' JSON provided below. 
+    2. DO NOT invent, combine, or hallucinate businesses. 
+    3. If you cannot find a perfect "Hidden Gem" in the raw data, pick the most unique real option available. 
     
-    Using the intended time provided, DO NOT recommend places that are likely closed or have the wrong vibe for this time of day.
+    TEMPORAL REALITY CHECK:
+    - You must review the 'regularOpeningHours' provided in the JSON. 
+    - If a venue closes before the user's Intended Time, you MUST NOT recommend it. 
+    
+    THE CONTEXTUAL MATRIX (STRICT ADHERENCE REQUIRED):
+    {contextual_rules}
     
     {instruction}
     
     Return the result STRICTLY as a JSON object with a 'recommendations' array containing:
-    'name', 'category', 'address', 'why_its_perfect' (2-sentence pitch factoring in the time/vibe), and 'vibe_check' (3-word summary).
+    'name', 'category', 'address', 'why_its_perfect' (2-sentence pitch EXPLAINING how it fits the Matrix rules), and 'vibe_check' (3-word summary).
     """
 
     response = client.chat.completions.create(
@@ -149,7 +169,7 @@ def get_ai_recommendations(raw_places, user_filters, intended_time, location_nam
         response_format={ "type": "json_object" },
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"FILTERS: {user_filters}\nAVAILABLE PLACES: {json.dumps(raw_places)}"}
+            {"role": "user", "content": f"AVAILABLE PLACES: {json.dumps(raw_places)}"}
         ]
     )
     return json.loads(response.choices[0].message.content)
@@ -198,7 +218,14 @@ with cost_col:
 
 distance = st.slider("How far are you willing to travel? (Miles)", 1, 20, 5)
 
-current_filters = f"Group: {group_type}, Setting: {vibe}, Sustenance: {food_pref}, Cost: {cost}, Distance: within {distance} miles."
+# Pack filters into a clean dictionary for the engine
+filters_dict = {
+    "group": group_type,
+    "time": intended_time,
+    "vibe": vibe,
+    "food": food_pref,
+    "cost": cost
+}
 
 # --- Action Buttons ---
 st.write("---")
@@ -235,10 +262,14 @@ if top_3_clicked or get_wild_clicked:
                 if lat is None:
                     st.error("Couldn't find that location. Try a different ZIP code or City.")
                 else:
-                    raw_places = fetch_local_places(lat=lat, lng=lng, radius_miles=distance)
+                    # 1. Ask Matrix what Google Types to search for
+                    dynamic_types = get_dynamic_place_types(food_pref, group_type, vibe)
                     
-                    # Pass intended_time instead of datetime.now()
-                    results = get_ai_recommendations(raw_places, current_filters, intended_time, location_context, mode=mode)
+                    # 2. Fetch raw data from Google
+                    raw_places = fetch_local_places(lat=lat, lng=lng, radius_miles=distance, dynamic_types=dynamic_types)
+                    
+                    # 3. Curate with AI using the Contextual Matrix Rules
+                    results = get_ai_recommendations(raw_places, filters_dict, location_context, mode=mode)
                     
                     if mode == "get_wild":
                         spot = results.get("recommendations", [])[0]
