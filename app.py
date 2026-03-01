@@ -26,6 +26,7 @@ custom_css = """
     .take-me-there-btn:hover { background-color: #1b5e20; box-shadow: 0 4px 12px rgba(46, 125, 50, 0.3); }
     .wild-card { background: linear-gradient(135deg, #f1f8e9 0%, #dcedc8 100%); border-left: 6px solid #558b2f; border-radius: 12px; padding: 25px; margin-top: 20px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); animation: fadeSlideUp 0.8s ease-out forwards; opacity: 0; transform: translateY(20px); }
     @keyframes fadeSlideUp { to { opacity: 1; transform: translateY(0); } }
+    div[role="radiogroup"] { gap: 1rem; }
 </style>
 """
 st.markdown(custom_css, unsafe_allow_html=True)
@@ -49,18 +50,22 @@ def build_semantic_query(filters_dict):
     elif filters_dict['group'] == "Solo": modifiers.append("cozy")
 
     if filters_dict.get('specific'): modifiers.append(filters_dict['specific'])
-
     modifier_str = " ".join(modifiers)
     
-    if filters_dict['food'] == "Full Meal": base = "restaurants"
-    elif filters_dict['food'] == "Just Drinks/Coffee": base = "bars, cafes, or breweries"
-    else: base = "parks and outdoor activities" if filters_dict['vibe'] == "Outside" else "attractions and activities"
+    # REFINED ALGORITHM: Wineries added, Parks expanded
+    if filters_dict['vibe'] == "Outside":
+        if filters_dict['food'] == "Full Meal":
+            base = "restaurants, patios, or wineries with outdoor dining"
+        elif filters_dict['food'] == "Just Drinks/Coffee":
+            base = "breweries, wineries, or outdoor bars with patios"
+        else:
+            base = "botanical gardens, outdoor attractions, mini golf, scenic trails, or parks"
+    else:
+        if filters_dict['food'] == "Full Meal": base = "restaurants"
+        elif filters_dict['food'] == "Just Drinks/Coffee": base = "bars, cafes, or lounges"
+        else: base = "entertainment activities, museums, or indoor attractions"
             
-    query = f"{modifier_str} {base}".strip()
-    if filters_dict['vibe'] == "Outside" and filters_dict['food'] in ["Full Meal", "Just Drinks/Coffee"]:
-        query += " with outdoor seating"
-        
-    return query
+    return f"{modifier_str} {base}".strip()
 
 def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
     url = "https://places.googleapis.com/v1/places:searchText"
@@ -84,8 +89,8 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
 
 def fetch_live_events(location_name, intended_time, group_type, current_date):
     url = "https://api.tavily.com/search"
-    # Added strict location and date to the search query to stop WA/GA bleed
-    query = f"What fun local events, live music, or specials are happening on {intended_time} strictly in or near {location_name} for a {group_type}? Today is {current_date}."
+    # REFINED TAVILY PROMPT: Strict extraction for actual events
+    query = f"Find specific local events, live music, festivals, trivia nights, or pop-ups happening on {intended_time} strictly in or near {location_name}. Today's date is {current_date}. List exact event names and locations suitable for a {group_type}."
     
     payload = {
         "api_key": TAVILY_API_KEY,
@@ -118,8 +123,8 @@ def get_ai_recommendations(raw_places, live_events_data, filters_dict, location_
         instruction = """
         Return EXACTLY 3 options from the data, structured strictly as:
         1. The Crowd-Pleaser: Established, highly-rated, local favorite.
-        2. The Fresh Take / Live Event: Check the 'LIVE WEB SEARCH EVENTS'. If there is a valid, local event happening, feature it here. If not, pick a trendy place from Google.
-        3. The Hidden Gem: A spot that feels unique. If you cannot find a true hidden gem in the provided data, just pick the most interesting real place available. Do NOT invent one.
+        2. The Fresh Take / Live Event: You MUST heavily prioritize the 'LIVE WEB SEARCH EVENTS' data. If a valid local event (trivia, live music, festival, etc.) is happening, feature it here.
+        3. The Hidden Gem: A spot that feels unique. If you cannot find a true hidden gem in the provided data, just pick the most interesting real place available.
         """
 
     system_prompt = f"""
@@ -133,9 +138,9 @@ def get_ai_recommendations(raw_places, live_events_data, filters_dict, location_
     - SPECIAL REQUEST: "{specific_request if specific_request else 'None'}"
     
     GEOGRAPHY & HALLUCINATION SHACKLES (MANDATORY):
-    1. DO NOT INVENT PLACES. If a place is not explicitly in the 'GOOGLE PLACES DATA' or 'LIVE WEB SEARCH EVENTS', you cannot recommend it. (e.g., Do not invent a 'Local Secret Bistro').
-    2. STRICT GEOGRAPHY: The location MUST be physically located in or immediately bordering {location_name}. If the web search returned an event in a different state (like WA or GA), IGNORE IT.
-    3. STRICT TIME: Compare 'Today's Date' to the events. If an event is on March 22nd, and the user asked for 'Tomorrow', do not recommend it.
+    1. DO NOT INVENT PLACES. If a place is not explicitly in the data below, you cannot recommend it.
+    2. STRICT GEOGRAPHY: The location MUST be physically located in or immediately bordering {location_name}. Ignore web search events from other states.
+    3. STRICT TIME: Compare 'Today's Date' to the events. Do not recommend past events.
     
     DATA SOURCES:
     1. GOOGLE PLACES DATA: A list of established local venues.
@@ -185,17 +190,15 @@ if geo_data and geo_data.get('latitude') is not None:
 st.write("---")
 st.subheader("What's the plan?")
 
-# --- NEW UX: Sleek Binary Toggles ---
+# --- REFINED UX: Clear, intuitive Radio buttons that act like toggles ---
 col_day, col_time = st.columns(2)
 with col_day:
-    is_tomorrow = st.toggle("📅 Tomorrow instead of Today")
+    # label_visibility="collapsed" hides the header text to keep it incredibly clean
+    day_choice = st.radio("Day", ["☀️ Today", "📅 Tomorrow"], horizontal=True, label_visibility="collapsed")
 with col_time:
-    is_night = st.toggle("🌙 Night instead of Daytime")
+    time_choice = st.radio("Time", ["☀️ Daytime", "🌙 Night"], horizontal=True, label_visibility="collapsed")
 
-day_str = "Tomorrow" if is_tomorrow else "Today"
-time_str = "Night" if is_night else "Daytime"
-intended_time = f"{day_str} ({time_str})"
-
+intended_time = f"{day_choice} ({time_choice})"
 st.write("") 
 
 col_group, col_vibe = st.columns(2)
@@ -239,12 +242,10 @@ if top_3_clicked or get_wild_clicked:
     if not location_input and not gps_active:
         st.warning("Please enter a location or click the GPS icon first!")
     else:
-        results = None # Initialize empty results
+        results = None 
         
-        # Phase 1: The Loading Spinner (Fetching Data)
         with st.spinner("Scouting the wild..."):
             try:
-                # Grab exact current date to prevent AI time-travel
                 current_date = datetime.now().strftime("%A, %B %d, %Y")
                 
                 location_context = location_input
@@ -267,7 +268,6 @@ if top_3_clicked or get_wild_clicked:
             except Exception as e:
                 st.error(f"Whoops! Something went wrong out in the wild: {e}")
                 
-        # Phase 2: The Render (Outside the spinner, no clicks needed!)
         if results:
             if mode == "get_wild":
                 spot = results.get("recommendations", [])[0]
