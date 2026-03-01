@@ -50,6 +50,8 @@ custom_css = """
     .spot-meta { font-size: 0.9rem; color: #666; margin-bottom: 15px; }
     .spot-pitch { font-size: 1.05rem; line-height: 1.5; color: #333; margin-bottom: 20px; }
     
+    .tag-pill { display: inline-block; background-color: #e8f5e9; color: #2e7d32; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem; font-weight: 600; margin-right: 6px; margin-bottom: 12px; border: 1px solid #c8e6c9; }
+    
     .icon-btn-row { display: flex; gap: 15px; margin-bottom: 10px; border-top: 1px solid #eee; padding-top: 15px; }
     .icon-btn { font-size: 1.6rem; text-decoration: none; transition: transform 0.2s; cursor: pointer; display: inline-block; }
     .icon-btn:hover { transform: scale(1.15); }
@@ -102,6 +104,13 @@ def get_excluded_spots(user_id):
     try:
         res = supabase.table('saved_spots').select('spot_name').eq('user_id', user_id).execute()
         return [spot['spot_name'] for spot in res.data] if res.data else []
+    except: return []
+
+def get_favorite_spots(user_id):
+    try:
+        # Pull spots rated 4 or 5 stars to train the AI
+        res = supabase.table('saved_spots').select('spot_name, category').eq('user_id', user_id).gte('rating', 4).execute()
+        return [f"{spot['spot_name']} ({spot['category']})" for spot in res.data] if res.data else []
     except: return []
 
 def save_spot_to_db(user_id, name, address, category, rating=None, notes=""):
@@ -175,28 +184,30 @@ def get_live_weather(lat, lng):
 
 def build_semantic_query(filters_dict, profile):
     modifiers = []
-    if filters_dict['group'] == "Date": modifiers.append("romantic")
-    elif filters_dict['group'] == "Family Outing": modifiers.append("kid-friendly")
-    elif filters_dict['group'] == "Friends": modifiers.append("fun lively")
-    elif filters_dict['group'] == "Solo": modifiers.append("cozy")
+    
+    # Highest priority: The Specific Keyword
+    if filters_dict.get('specific'):
+        modifiers.append(filters_dict['specific'])
 
     if profile:
         if profile.get('needs_dog_friendly') and filters_dict['vibe'] == "Outside": modifiers.append("dog-friendly")
         if profile.get('vibe_preference'): modifiers.append(profile.get('vibe_preference'))
 
+    if filters_dict['group'] == "Date": modifiers.append("intimate")
+    elif filters_dict['group'] == "Family Outing": modifiers.append("kid-friendly")
+    elif filters_dict['group'] == "Friends": modifiers.append("lively")
+
     modifier_str = " ".join(modifiers)
     
-    if filters_dict.get('specific'):
-        base = filters_dict['specific']
+    # Always keep a strong base category so Google doesn't return random offices/services
+    if filters_dict['vibe'] == "Outside":
+        if filters_dict['food'] == "Full Meal": base = "restaurants with nice patios"
+        elif filters_dict['food'] == "Just Drinks/Coffee": base = "wineries, cocktail bars with patios, or upscale breweries"
+        else: base = "botanical gardens, scenic views, or parks"
     else:
-        if filters_dict['vibe'] == "Outside":
-            if filters_dict['food'] == "Full Meal": base = "restaurants, patios, or wineries with outdoor dining"
-            elif filters_dict['food'] == "Just Drinks/Coffee": base = "breweries, wineries, or outdoor bars with patios"
-            else: base = "botanical gardens, outdoor attractions, mini golf, scenic trails, or parks"
-        else:
-            if filters_dict['food'] == "Full Meal": base = "restaurants"
-            elif filters_dict['food'] == "Just Drinks/Coffee": base = "bars, cafes, or lounges"
-            else: base = "entertainment activities, museums, or indoor attractions"
+        if filters_dict['food'] == "Full Meal": base = "highly rated restaurants"
+        elif filters_dict['food'] == "Just Drinks/Coffee": base = "wine bars, speakeasies, or lounges"
+        else: base = "entertainment, museums, or unique attractions"
             
     return f"{modifier_str} {base}".strip()
 
@@ -222,8 +233,8 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
 
 def fetch_live_events(location_name, intended_time, group_type, target_date_str, relative_day):
     url = "https://api.tavily.com/search"
-    query = f"Find specific events, live music, or festivals happening EXACTLY {relative_day}, {target_date_str}, strictly in {location_name}. Discard any events outside this immediate area. Provide venue name, exact street address, exact start time, and direct website link."
-    payload = {"api_key": TAVILY_API_KEY, "query": query, "search_depth": "basic", "include_answer": True, "max_results": 3}
+    query = f"Find events, live music, theater, or festivals happening EXACTLY {relative_day}, {target_date_str}. Location MUST be strictly in or bordering {location_name}. Discard anything in other states. Provide venue name, exact street address, start time, and direct website link."
+    payload = {"api_key": TAVILY_API_KEY, "query": query, "search_depth": "advanced", "include_answer": True, "max_results": 3}
     try:
         response = requests.post(url, json=payload, timeout=15)
         data = response.json()
@@ -231,7 +242,7 @@ def fetch_live_events(location_name, intended_time, group_type, target_date_str,
     except: return "No live event data found."
 
 @retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3))
-def get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_name, target_date_str, relative_day, profile, excluded_spots, mode="top_3"):
+def get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_name, target_date_str, relative_day, profile, excluded_spots, favorite_spots, mode="top_3"):
     client = OpenAI(api_key=OPENAI_API_KEY)
     
     trimmed_places = raw_places[:8] if isinstance(raw_places, list) and len(raw_places) > 8 else raw_places
@@ -242,15 +253,21 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
         stroller = "MUST be stroller accessible." if profile.get('needs_stroller_access') else ""
         dog = "MUST be dog-friendly." if profile.get('needs_dog_friendly') and filters_dict['vibe'] == "Outside" else ""
         vibe_pref = f"Prioritize locations matching this vibe: {profile.get('vibe_preference')}." if profile.get('vibe_preference') else ""
-        profile_context = f"\nUSER BASELINE PROFILE:\n{stroller}\n{dog}\n{vibe_pref}"
+        history_context = f"\nUSER'S HISTORICAL FAVORITES (Learn from their taste!): {', '.join(favorite_spots)}" if favorite_spots else ""
+        profile_context = f"\nUSER BASELINE PROFILE:\n{stroller}\n{dog}\n{vibe_pref}{history_context}"
 
     blacklist_context = f"CRITICAL: DO NOT RECOMMEND ANY OF THESE PLACES: {', '.join(excluded_spots)}" if excluded_spots else ""
 
-    instruction = """Select EXACTLY ONE option from the data. Assign it the category: 'Spontaneous Adventure'.""" if mode == "get_wild" else """Return EXACTLY 3 options from the data, structured strictly as:
-        1. The Crowd-Pleaser: Established, highly-rated, local favorite.
-        2. The Fresh Take / Live Event: Prioritize the 'LIVE WEB SEARCH EVENTS' data.
-        3. The Hidden Gem: A spot that feels unique.
-        CRITICAL VARIETY RULE: You MUST provide variety. Do not return three of the exact same type of venue (e.g., if option 1 is a brewery, do not make option 3 a brewery)."""
+    if mode == "get_wild":
+        instruction = """Select EXACTLY ONE option from the data. Assign it the category: 'Spontaneous Adventure'."""
+    else:
+        instruction = """
+        Return EXACTLY 3 options from the data, providing STRICT VARIETY (do not return 3 of the exact same type of venue). 
+        Assign each to one of these directional 'tier_name' categories:
+        1. 'The Crowd-Pleaser': A highly rated, established safe bet that closely aligns with their profile and past favorites.
+        2. 'The Fresh Take': A live event from the web search, a trending new spot, or something catching on.
+        3. 'The Hidden Gem': Something quirky, unique, or slightly off the beaten path.
+        """
 
     if filters_dict.get('vibe') == "Outside":
         weather_rule = "3. WEATHER PIVOT: If weather report indicates RAIN, SNOW, or TEMP < 45°F, prioritize indoor venues or those with heated patios."
@@ -259,13 +276,13 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
 
     specific_rule = ""
     if filters_dict.get('specific'):
-        specific_rule = f"5. MANDATORY SPECIFIC REQUIREMENT: The user specifically requested '{filters_dict['specific']}'. EVERY recommendation MUST align with this keyword. Do not suggest alternatives."
+        specific_rule = f"5. MANDATORY SPECIFIC REQUIREMENT: The user explicitly requested '{filters_dict['specific']}'. EVERY recommendation MUST align with this vibe. Pluck the 2-3 most important keywords from this request and output them in the 'matched_tags' array."
 
     system_prompt = f"""
     You are a luxury local concierge for an app called 'Get Wild'.
     
     CRITICAL CONTEXT:
-    - User Location: {location_name}
+    - Target Location: {location_name}
     - CURRENT WEATHER: {weather_report}
     - TARGET EVENT DATE: {target_date_str} ({relative_day})
     - User Intended Time: {filters_dict['time']}
@@ -283,7 +300,7 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
     {instruction}
     
     Return STRICTLY as a JSON object with a 'recommendations' array containing:
-    'name', 'category', 'address' (Exact from data), 'why_its_perfect' (2-3 sentences), 'vibe_check' (3 words), 'website' (URL if available, otherwise empty string), 'photo_ref' (The string from places.photos[0].name if available, otherwise empty), 'lat' (float), and 'lng' (float).
+    'name', 'tier_name' (e.g., The Crowd-Pleaser), 'category', 'address' (Exact from data), 'why_its_perfect' (2-3 sentences), 'vibe_check' (3 words), 'matched_tags' (Array of 2-3 strings highlighting the specific keywords you honored, e.g., ["Romantic", "Good Wine"]. Leave empty if no specific keyword was given.), 'website' (URL if available), 'photo_ref' (String from places.photos[0].name if available), 'lat' (float), and 'lng' (float).
     """
 
     response = client.chat.completions.create(
@@ -334,13 +351,20 @@ def render_spot_card(spot, location_input, user_id, index, mode):
     img_html = f'<img src="{img_url}" class="wild-card-img">'
     website_icon = f'<a href="{spot["website"]}" target="_blank" class="icon-btn" title="Visit Website">🌐</a>' if spot.get('website') else ""
 
+    # Generate visual tag pills based on what the AI learned
+    tags_html = ""
+    if spot.get('matched_tags'):
+        for tag in spot['matched_tags']:
+            tags_html += f'<span class="tag-pill">✓ {tag}</span>'
+
     html_card = f"""
 <div class="wild-card {special_class}">
 {img_html}
 <div class="wild-card-content">
-<span class="spot-category">{spot.get('category', 'Top Pick')}</span>
+<span class="spot-category" style="color:#d84315;">{spot.get('tier_name', 'Top Pick')}</span> • <span class="spot-category">{spot.get('category', '')}</span>
 <h2 class="spot-title">{title_prefix} {spot['name']}</h2>
 <div class="spot-meta">📍 {spot['address']} | ✨ <b>{spot['vibe_check']}</b></div>
+<div>{tags_html}</div>
 <p class="spot-pitch">{spot['why_its_perfect']}</p>
 <div class="icon-btn-row">
 <a href="{map_url}" target="_blank" class="icon-btn" title="View on Maps">🗺️</a>
@@ -467,7 +491,7 @@ else:
                 ui_dist = st.slider("Max Distance (Miles)", 1, 20, st.session_state.mem_dist)
 
             with st.expander("Need something specific? (Optional)", expanded=False):
-                ui_spec = st.text_input("Keyword", value=st.session_state.mem_spec, placeholder="e.g., 'live jazz', 'vegan options'", label_visibility="collapsed")
+                ui_spec = st.text_input("Keyword", value=st.session_state.mem_spec, placeholder="e.g., 'romantic', 'live jazz', 'large group'", label_visibility="collapsed")
 
             st.write("---")
             
@@ -543,11 +567,14 @@ else:
                         db_excluded = get_excluded_spots(st.session_state.user.id)
                         all_excluded = list(set(db_excluded + st.session_state.session_seen_spots))
                         
+                        # NEW: Fetch favorites to feed the AI
+                        user_favorites = get_favorite_spots(st.session_state.user.id)
+                        
                         st.session_state.current_results = get_ai_recommendations(
                             raw_places, live_events_data, weather_report, 
                             st.session_state.filters_dict, location_context, 
                             target_date_str, relative_day, user_profile, all_excluded, 
-                            mode=st.session_state.current_mode
+                            user_favorites, mode=st.session_state.current_mode
                         )
                         
                         for rec in st.session_state.current_results.get("recommendations", []):
