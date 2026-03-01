@@ -43,12 +43,13 @@ custom_css = """
     .spot-title { font-size: 1.5rem; font-weight: 700; color: #1a1a1a; margin-top: 0; margin-bottom: 5px; }
     .spot-meta { font-size: 0.9rem; color: #666; margin-bottom: 15px; }
     .spot-pitch { font-size: 1.05rem; line-height: 1.5; color: #333; margin-bottom: 20px; }
-    .link-row { display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap; }
-    .outbound-link { background-color: #f5f5f5; color: #333 !important; padding: 8px 16px; border-radius: 20px; text-decoration: none; font-size: 0.9rem; font-weight: 600; border: 1px solid #e0e0e0; transition: all 0.2s; }
+    .link-row { display: flex; gap: 8px; margin-bottom: 15px; flex-wrap: wrap; }
+    .outbound-link { background-color: #f5f5f5; color: #333 !important; padding: 8px 14px; border-radius: 20px; text-decoration: none; font-size: 0.85rem; font-weight: 600; border: 1px solid #e0e0e0; transition: all 0.2s; }
     .outbound-link:hover { background-color: #e0e0e0; }
     .uber-link { background-color: #000000; color: #ffffff !important; border-color: #000000; }
     .uber-link:hover { background-color: #333333; }
-    .group-chat-box { font-family: monospace; background: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; }
+    .share-link { background-color: #e3f2fd; border-color: #bbdefb; color: #1976d2 !important; }
+    .share-link:hover { background-color: #bbdefb; }
     @keyframes fadeSlideUp { to { opacity: 1; transform: translateY(0); } }
 </style>
 """
@@ -60,7 +61,7 @@ st.markdown(custom_css, unsafe_allow_html=True)
 if 'user' not in st.session_state: st.session_state.user = None
 if 'current_results' not in st.session_state: st.session_state.current_results = None 
 if 'current_mode' not in st.session_state: st.session_state.current_mode = None
-if 'session_seen_spots' not in st.session_state: st.session_state.session_seen_spots = [] # Tracks spots seen this session for the Shuffle feature
+if 'session_seen_spots' not in st.session_state: st.session_state.session_seen_spots = []
 
 def get_profile(user_id):
     try:
@@ -69,7 +70,6 @@ def get_profile(user_id):
     except: return None
 
 def get_excluded_spots(user_id):
-    """Pulls ALL saved spots for this user so they are never recommended again."""
     try:
         res = supabase.table('saved_spots').select('spot_name').eq('user_id', user_id).execute()
         return [spot['spot_name'] for spot in res.data] if res.data else []
@@ -136,14 +136,12 @@ def build_semantic_query(filters_dict, profile):
             
     return f"{modifier_str} {base}".strip()
 
-# SMART CACHING: Saves API calls & speeds up frequent searches
 @st.cache_data(ttl=3600)
 def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
     url = "https://places.googleapis.com/v1/places:searchText"
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": GOOGLE_API_KEY,
-        # Included places.location to power the interactive map
         "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.websiteUri,places.photos,places.editorialSummary,places.location"
     }
     radius_meters = int(radius_miles * 1609.34)
@@ -181,7 +179,6 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
         vibe_pref = f"Prioritize locations matching this vibe: {profile.get('vibe_preference')}." if profile.get('vibe_preference') else ""
         profile_context = f"\nUSER BASELINE PROFILE:\n{stroller}\n{dog}\n{vibe_pref}"
 
-    # SHUFFLE & SAVED EXCLUSION LOGIC
     blacklist_context = f"CRITICAL: DO NOT RECOMMEND ANY OF THESE PLACES: {', '.join(excluded_spots)}" if excluded_spots else ""
 
     instruction = """Select EXACTLY ONE option from the data. Assign it the category: 'Spontaneous Adventure'.""" if mode == "get_wild" else """Return EXACTLY 3 options from the data, structured strictly as:
@@ -220,7 +217,7 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"GOOGLE PLACES DATA: {json.dumps(trimmed_places)}\n\nLIVE WEB SEARCH EVENTS:\n{safe_events_data}"}
         ],
-        max_tokens=600  # Bumped slightly to account for mapping coordinates
+        max_tokens=1000  # Bumped to 1000 to completely prevent the blank JSON truncation error
     )
     return json.loads(response.choices[0].message.content)
 
@@ -229,6 +226,12 @@ def render_spot_card(spot, location_input, user_id):
     map_url = f"https://www.google.com/maps/search/?api=1&query={search_term}"
     encoded_address = urllib.parse.quote(spot['address'])
     uber_url = f"https://m.uber.com/ul/?action=setPickup&pickup=my_location&dropoff[formatted_address]={encoded_address}"
+    
+    # Generate native Share Links
+    raw_share_text = f"Let's go to {spot['name']}!\n📍 {spot['address']}\n🗺️ {map_url}"
+    encoded_share = urllib.parse.quote(raw_share_text)
+    sms_url = f"sms:?&body={encoded_share}"
+    email_url = f"mailto:?subject={urllib.parse.quote('Wild Plan: ' + spot['name'])}&body={encoded_share}"
     
     if spot.get('photo_ref'):
         img_url = f"https://places.googleapis.com/v1/{spot['photo_ref']}/media?key={GOOGLE_API_KEY}&maxHeightPx=400&maxWidthPx=800"
@@ -257,7 +260,9 @@ def render_spot_card(spot, location_input, user_id):
 <div class="link-row">
 <a href="{map_url}" target="_blank" class="outbound-link">🗺️ Maps</a>
 {website_html}
-<a href="{uber_url}" target="_blank" class="outbound-link uber-link">🚗 Ride with Uber</a>
+<a href="{uber_url}" target="_blank" class="outbound-link uber-link">🚗 Uber</a>
+<a href="{sms_url}" class="outbound-link share-link">💬 Text</a>
+<a href="{email_url}" class="outbound-link share-link">✉️ Email</a>
 </div>
 </div>
 </div>
@@ -276,7 +281,6 @@ def render_spot_card(spot, location_input, user_id):
 # 5. ASYNC DATA GATHERER 
 # ==========================================
 async def gather_all_data(lat, lng, semantic_query, distance, location_input, intended_time, group_type, current_date):
-    """Runs the API calls in parallel background threads to slash load times."""
     weather_task = asyncio.to_thread(get_live_weather, lat, lng)
     places_task = asyncio.to_thread(fetch_places_semantic, semantic_query, lat, lng, distance)
     events_task = asyncio.to_thread(fetch_live_events, location_input if location_input else "nearby", intended_time, group_type, current_date)
@@ -369,7 +373,6 @@ else:
 
         st.write("---")
         
-        # UI: Add Shuffle Button
         btn_col1, btn_col2, btn_col3 = st.columns(3)
         with btn_col1: top_3_clicked = st.button("🌟 Top 3 Recommendations", use_container_width=True)
         with btn_col2: get_wild_clicked = st.button("🎲 GET WILD", type="primary", use_container_width=True)
@@ -383,7 +386,6 @@ else:
                 if not location_input and not gps_active:
                     st.warning("Please enter a location or click the GPS icon first!")
                 else:
-                    # Dynamic Status Loader instead of static spinner
                     with st.status("Scouting the wild...", expanded=True) as status:
                         try:
                             current_date = datetime.now().strftime("%A, %B %d, %Y")
@@ -403,59 +405,44 @@ else:
                                 st.write("☁️ Fetching live weather, places, and local events...")
                                 semantic_query = build_semantic_query(filters_dict, user_profile)
                                 
-                                # Parallel processing via Asyncio
                                 weather_report, raw_places, live_events_data = asyncio.run(
                                     gather_all_data(lat, lng, semantic_query, distance, location_input, intended_time, group_type, current_date)
                                 )
                                 
                                 st.write("🧠 The AI is assembling your perfect itinerary...")
                                 
-                                # EXCLUSION LOGIC: Combine DB Saved Spots + Spots seen this session (Shuffle)
                                 db_excluded = get_excluded_spots(st.session_state.user.id)
                                 all_excluded = list(set(db_excluded + st.session_state.session_seen_spots))
                                 
                                 st.session_state.current_results = get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_context, current_date, user_profile, all_excluded, mode=mode)
                                 st.session_state.current_mode = mode
                                 
-                                # Track these new spots so they aren't repeated on the next shuffle
                                 for rec in st.session_state.current_results.get("recommendations", []):
                                     st.session_state.session_seen_spots.append(rec['name'])
 
                                 status.update(label="Itinerary Ready!", state="complete", expanded=False)
                         except Exception as e: 
-                            st.error(f"Error: {e}")
+                            st.error(f"Error communicating with AI. Try shuffling again! ({e})")
                             status.update(label="An error occurred", state="error")
 
         if st.session_state.current_results:
             st.write("---")
             results = st.session_state.current_results
             
-            # --- INTERACTIVE MAP ---
+            # --- EXPANDABLE MAP ---
             map_data = []
             for spot in results.get("recommendations", []):
                 if spot.get('lat') and spot.get('lng'):
                     map_data.append({"lat": spot['lat'], "lon": spot['lng'], "name": spot['name']})
             
             if map_data:
-                st.subheader("🗺️ Your Night at a Glance")
-                st.map(pd.DataFrame(map_data), zoom=12)
-                st.write("")
+                with st.expander("🗺️ View on Map"):
+                    st.map(pd.DataFrame(map_data), zoom=12)
             
             # --- RENDER CARDS ---
-            chat_text = "Hey! Check out this plan I made on Get Wild:\n\n"
-            
             for index, spot in enumerate(results.get("recommendations", [])):
                 render_spot_card(spot, location_input, st.session_state.user.id)
                 st.write("---")
-                
-                # Build Group Chat String
-                chat_text += f"{index + 1}. {spot['name']} - {spot['vibe_check']}\n"
-                chat_text += f"📍 {spot['address']}\n"
-                chat_text += f"🗺️ https://www.google.com/maps/search/?api=1&query={spot['name'].replace(' ', '+')}+{urllib.parse.quote(location_input)}\n\n"
-            
-            # --- THE VIRAL LOOP (SEND TO GROUP CHAT) ---
-            st.subheader("💬 Send to the Group Chat")
-            st.text_area("Copy and paste this into iMessage or WhatsApp:", value=chat_text.strip(), height=200)
 
     # ----------------------------------------
     # TAB 2 & 3: PROFILE & SAVED SPOTS (Unchanged)
