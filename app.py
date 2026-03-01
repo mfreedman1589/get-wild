@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import json
+import urllib.parse
 from openai import OpenAI
 from datetime import datetime
 from streamlit_geolocation import streamlit_geolocation
@@ -31,11 +32,19 @@ custom_css = """
     .hero-header { text-align: center; padding: 2rem 0 1rem 0; }
     .hero-title { color: #2e7d32; font-family: 'Helvetica Neue', sans-serif; font-size: 3.5rem; font-weight: 800; letter-spacing: -1px; text-transform: uppercase; margin-bottom: 0; line-height: 1.1; }
     .hero-subtitle { color: #558b2f; font-size: 1.2rem; font-weight: 400; letter-spacing: 1px; margin-top: 10px; }
-    .take-me-there-btn { display: inline-block; background-color: #2e7d32; color: white !important; text-align: center; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; letter-spacing: 0.5px; width: 100%; transition: all 0.3s ease; margin-top: 10px; }
-    .take-me-there-btn:hover { background-color: #1b5e20; box-shadow: 0 4px 12px rgba(46, 125, 50, 0.3); }
-    .wild-card { background: linear-gradient(135deg, #f1f8e9 0%, #dcedc8 100%); border-left: 6px solid #558b2f; border-radius: 12px; padding: 25px; margin-top: 20px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); animation: fadeSlideUp 0.8s ease-out forwards; opacity: 0; transform: translateY(20px); }
+    .wild-card { background: #ffffff; border: 1px solid #e0e0e0; border-radius: 16px; overflow: hidden; margin-top: 20px; margin-bottom: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.06); animation: fadeSlideUp 0.8s ease-out forwards; opacity: 0; transform: translateY(20px); }
+    .wild-card-img { width: 100%; height: 220px; object-fit: cover; }
+    .wild-card-content { padding: 20px; }
+    .spot-category { color: #558b2f; font-weight: 700; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 1px; margin-bottom: 5px; display: block; }
+    .spot-title { font-size: 1.5rem; font-weight: 700; color: #1a1a1a; margin-top: 0; margin-bottom: 5px; }
+    .spot-meta { font-size: 0.9rem; color: #666; margin-bottom: 15px; }
+    .spot-pitch { font-size: 1.05rem; line-height: 1.5; color: #333; margin-bottom: 20px; }
+    .link-row { display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap; }
+    .outbound-link { background-color: #f5f5f5; color: #333 !important; padding: 8px 16px; border-radius: 20px; text-decoration: none; font-size: 0.9rem; font-weight: 600; border: 1px solid #e0e0e0; transition: all 0.2s; }
+    .outbound-link:hover { background-color: #e0e0e0; }
+    .uber-link { background-color: #000000; color: #ffffff !important; border-color: #000000; }
+    .uber-link:hover { background-color: #333333; }
     @keyframes fadeSlideUp { to { opacity: 1; transform: translateY(0); } }
-    div[role="radiogroup"] { gap: 1rem; }
 </style>
 """
 st.markdown(custom_css, unsafe_allow_html=True)
@@ -43,12 +52,9 @@ st.markdown(custom_css, unsafe_allow_html=True)
 # ==========================================
 # 3. SESSION STATE & DATABASE HELPERS
 # ==========================================
-if 'user' not in st.session_state:
-    st.session_state.user = None
-if 'current_results' not in st.session_state:
-    st.session_state.current_results = None 
-if 'current_mode' not in st.session_state:
-    st.session_state.current_mode = None
+if 'user' not in st.session_state: st.session_state.user = None
+if 'current_results' not in st.session_state: st.session_state.current_results = None 
+if 'current_mode' not in st.session_state: st.session_state.current_mode = None
 
 def get_profile(user_id):
     try:
@@ -56,14 +62,28 @@ def get_profile(user_id):
         return res.data[0] if res.data else None
     except: return None
 
-def save_spot_to_db(user_id, name, address, category):
+def get_disliked_spots(user_id):
+    """Pulls the user's 1-star rated spots to create a blacklist."""
+    try:
+        res = supabase.table('saved_spots').select('spot_name').eq('user_id', user_id).eq('rating', 1).execute()
+        return [spot['spot_name'] for spot in res.data] if res.data else []
+    except: return []
+
+def save_spot_to_db(user_id, name, address, category, rating=None, notes=""):
     try:
         supabase.table('saved_spots').insert({
-            'user_id': user_id, 'spot_name': name, 'address': address, 'category': category
+            'user_id': user_id, 'spot_name': name, 'address': address, 'category': category, 'rating': rating, 'user_notes': notes
         }).execute()
-        st.toast(f"✅ Saved {name} to your list!")
-    except Exception as e:
-        st.error("Failed to save spot.")
+        
+        # Gamification: Increment Tally if it's a positive save
+        if rating != 1:
+            prof = get_profile(user_id)
+            new_tally = (prof.get('wild_tally') or 0) + 1
+            supabase.table('user_profiles').update({'wild_tally': new_tally}).eq('id', user_id).execute()
+            st.toast(f"✅ Saved! Your Get Wild Tally is now {new_tally} 🏆")
+        else:
+            st.toast("🚫 Blacklisted. We won't recommend this again.")
+    except Exception as e: st.error("Database error.")
 
 # ==========================================
 # 4. HELPER FUNCTIONS (The Engine)
@@ -83,7 +103,6 @@ def build_semantic_query(filters_dict, profile):
     elif filters_dict['group'] == "Friends": modifiers.append("fun lively")
     elif filters_dict['group'] == "Solo": modifiers.append("cozy")
 
-    # Inject Profile Preferences
     if profile:
         if profile.get('needs_dog_friendly') and filters_dict['vibe'] == "Outside": modifiers.append("dog-friendly")
         if profile.get('vibe_preference'): modifiers.append(profile.get('vibe_preference'))
@@ -107,15 +126,14 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": GOOGLE_API_KEY,
-        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.types,places.regularOpeningHours,places.priceLevel,places.editorialSummary"
+        # V8 UPDATE: Added websiteUri and photos to the data mask
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.websiteUri,places.photos,places.editorialSummary"
     }
     radius_meters = int(radius_miles * 1609.34)
     data = {
         "textQuery": semantic_query,
         "pageSize": 20,
-        "locationBias": {
-            "circle": {"center": {"latitude": lat, "longitude": lng}, "radius": radius_meters}
-        }
+        "locationBias": {"circle": {"center": {"latitude": lat, "longitude": lng}, "radius": radius_meters}}
     }
     response = requests.post(url, headers=headers, json=data)
     if response.status_code != 200: raise Exception(f"Google API Error: {response.text}")
@@ -123,15 +141,15 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
 
 def fetch_live_events(location_name, intended_time, group_type, current_date):
     url = "https://api.tavily.com/search"
-    query = f"Find specific local events, live music, festivals, trivia nights, or pop-ups happening on {intended_time} strictly in or near {location_name}. Today's date is {current_date}. List exact event names and locations suitable for a {group_type}."
+    query = f"Find specific local events, live music, festivals, trivia nights, or pop-ups happening on {intended_time} strictly in or near {location_name}. Today's date is {current_date}. List exact event names."
     payload = {"api_key": TAVILY_API_KEY, "query": query, "search_depth": "basic", "include_answer": True, "max_results": 3}
     try:
         response = requests.post(url, json=payload)
         data = response.json()
-        return f"TAVILY AI WEB SEARCH SUMMARY: {data.get('answer', '')} \n\nRAW WEB CONTEXT: {' '.join([res.get('content', '') for res in data.get('results', [])])}"
+        return f"TAVILY AI WEB SEARCH SUMMARY: {data.get('answer', '')}"
     except: return "No live event data found."
 
-def get_ai_recommendations(raw_places, live_events_data, filters_dict, location_name, current_date, profile, mode="top_3"):
+def get_ai_recommendations(raw_places, live_events_data, filters_dict, location_name, current_date, profile, disliked_spots, mode="top_3"):
     client = OpenAI(api_key=OPENAI_API_KEY)
     
     profile_context = ""
@@ -139,13 +157,15 @@ def get_ai_recommendations(raw_places, live_events_data, filters_dict, location_
         stroller = "MUST be stroller accessible." if profile.get('needs_stroller_access') else ""
         dog = "MUST be dog-friendly." if profile.get('needs_dog_friendly') and filters_dict['vibe'] == "Outside" else ""
         vibe_pref = f"Prioritize locations matching this vibe: {profile.get('vibe_preference')}." if profile.get('vibe_preference') else ""
-        partner = f"The user's partner is named {profile.get('partner_name')}." if profile.get('partner_name') else ""
-        profile_context = f"\nUSER BASELINE PROFILE:\n{stroller}\n{dog}\n{vibe_pref}\n{partner}"
+        profile_context = f"\nUSER BASELINE PROFILE:\n{stroller}\n{dog}\n{vibe_pref}"
 
-    instruction = """Select EXACTLY ONE option from the data. It must be an unexpected, spontaneous adventure. Assign it the category: 'Spontaneous Adventure'.""" if mode == "get_wild" else """Return EXACTLY 3 options from the data, structured strictly as:
+    # V8 UPDATE: The Negative Feedback Loop
+    blacklist_context = f"CRITICAL: DO NOT RECOMMEND ANY OF THESE PLACES: {', '.join(disliked_spots)}" if disliked_spots else ""
+
+    instruction = """Select EXACTLY ONE option from the data. Assign it the category: 'Spontaneous Adventure'.""" if mode == "get_wild" else """Return EXACTLY 3 options from the data, structured strictly as:
         1. The Crowd-Pleaser: Established, highly-rated, local favorite.
         2. The Fresh Take / Live Event: You MUST heavily prioritize the 'LIVE WEB SEARCH EVENTS' data.
-        3. The Hidden Gem: A spot that feels unique. Pick the most interesting real place available."""
+        3. The Hidden Gem: A spot that feels unique."""
 
     system_prompt = f"""
     You are a luxury local concierge for an app called 'Get Wild'.
@@ -157,20 +177,20 @@ def get_ai_recommendations(raw_places, live_events_data, filters_dict, location_
     - Session Profile: {filters_dict['group']} looking for {filters_dict['food']} in a {filters_dict['vibe']} setting.
     - SPECIAL REQUEST: "{filters_dict.get('specific') if filters_dict.get('specific') else 'None'}"
     {profile_context}
+    {blacklist_context}
     
     GEOGRAPHY & HALLUCINATION SHACKLES (MANDATORY):
     1. DO NOT INVENT PLACES. Must be in the provided data.
     2. STRICT GEOGRAPHY: Must be physically in or immediately bordering {location_name}.
-    3. STRICT TIME: Do not recommend past events.
     
     DATA SOURCES:
-    1. GOOGLE PLACES DATA: A list of established local venues.
-    2. LIVE WEB SEARCH EVENTS: Live data scraped from the web.
+    1. GOOGLE PLACES DATA
+    2. LIVE WEB SEARCH EVENTS
     
     {instruction}
     
     Return STRICTLY as a JSON object with a 'recommendations' array containing:
-    'name', 'category', 'address', 'why_its_perfect' (2 sentences. Weave in how it matches their Baseline Profile if applicable!), and 'vibe_check' (3 words).
+    'name', 'category', 'address', 'why_its_perfect' (2 sentences), 'vibe_check' (3 words), 'website' (URL if available in data, otherwise empty string), and 'photo_ref' (The string from places.photos[0].name if available, otherwise empty).
     """
 
     response = client.chat.completions.create(
@@ -183,6 +203,53 @@ def get_ai_recommendations(raw_places, live_events_data, filters_dict, location_
     )
     return json.loads(response.choices[0].message.content)
 
+def render_spot_card(spot, location_input, user_id):
+    """V8 UI UPDATE: Renders a premium card with images and dynamic outbound links."""
+    # 1. Map URL
+    search_term = spot['name'].replace(' ', '+') + f"+{location_input.replace(' ', '+')}"
+    map_url = f"https://www.google.com/maps/search/?api=1&query={search_term}"
+    
+    # 2. Uber Deep Link
+    encoded_address = urllib.parse.quote(spot['address'])
+    uber_url = f"https://m.uber.com/ul/?action=setPickup&pickup=my_location&dropoff[formatted_address]={encoded_address}"
+    
+    # 3. Photo URL
+    img_html = ""
+    if spot.get('photo_ref'):
+        img_url = f"https://places.googleapis.com/v1/{spot['photo_ref']}/media?key={GOOGLE_API_KEY}&maxHeightPx=400&maxWidthPx=800"
+        img_html = f'<img src="{img_url}" class="wild-card-img">'
+    
+    # 4. Website Link HTML
+    website_html = f'<a href="{spot["website"]}" target="_blank" class="outbound-link">🌐 Website</a>' if spot.get('website') else ""
+
+    # Generate the Card HTML
+    html_card = f"""
+    <div class="wild-card">
+        {img_html}
+        <div class="wild-card-content">
+            <span class="spot-category">{spot.get('category', 'Top Pick')}</span>
+            <h2 class="spot-title">{spot['name']}</h2>
+            <div class="spot-meta">📍 {spot['address']} | ✨ <b>{spot['vibe_check']}</b></div>
+            <p class="spot-pitch">{spot['why_its_perfect']}</p>
+            <div class="link-row">
+                <a href="{map_url}" target="_blank" class="outbound-link">🗺️ Maps</a>
+                {website_html}
+                <a href="{uber_url}" target="_blank" class="outbound-link uber-link">🚗 Ride with Uber</a>
+            </div>
+        </div>
+    </div>
+    """
+    st.markdown(html_card, unsafe_allow_html=True)
+    
+    # 5. Interactive Streamlit Buttons (Save & Thumbs Down)
+    col1, col2, col3 = st.columns([1, 1, 2])
+    with col1:
+        if st.button("🔖 Save to List", key=f"save_{spot['name']}"):
+            save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'))
+    with col2:
+        if st.button("🚫 Not for me", key=f"hate_{spot['name']}"):
+            # Saving with a 1-star rating triggers the blacklist
+            save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'), rating=1, notes="Blacklisted via quick-button.")
 
 # ==========================================
 # 5. UI ROUTING
@@ -190,11 +257,11 @@ def get_ai_recommendations(raw_places, live_events_data, filters_dict, location_
 st.markdown("""
 <div class="hero-header">
     <h1 class="hero-title">Get Wild</h1>
-    <p class="hero-subtitle">Disconnect. Explore. Breathe.</p>
+    <p class="hero-subtitle">Disconnect. Explore. Connect.</p>
 </div>
 """, unsafe_allow_html=True)
 
-# --- AUTHENTICATION SCREEN ---
+# --- AUTHENTICATION ---
 if st.session_state.user is None:
     st.write("---")
     st.subheader("Welcome to the Wild.")
@@ -222,7 +289,7 @@ if st.session_state.user is None:
                     st.rerun()
                 except Exception as e: st.error(f"Signup failed: {e}")
 
-# --- MAIN APPLICATION SCREEN ---
+# --- MAIN APPLICATION ---
 else:
     col1, col2 = st.columns([4, 1])
     with col2:
@@ -232,7 +299,6 @@ else:
             st.session_state.current_results = None
             st.rerun()
             
-    # THE 3-TAB NAVIGATION
     tab_explore, tab_profile, tab_saved = st.tabs(["🌍 Explore", "👤 My Profile", "⭐ Saved Spots"])
 
     # ----------------------------------------
@@ -279,7 +345,6 @@ else:
         with btn_col1: top_3_clicked = st.button("🌟 Top 3 Recommendations", use_container_width=True)
         with btn_col2: get_wild_clicked = st.button("🎲 GET WILD", type="primary", use_container_width=True)
 
-        # Execution Logic
         if top_3_clicked or get_wild_clicked:
             mode = "get_wild" if get_wild_clicked else "top_3"
             if not location_input and not gps_active:
@@ -297,64 +362,35 @@ else:
                         
                         if lat is None: st.error("Couldn't find that location.")
                         else:
+                            # Pull profile and blacklisted spots before asking AI
+                            disliked_spots = get_disliked_spots(st.session_state.user.id)
                             semantic_query = build_semantic_query(filters_dict, user_profile)
                             raw_places = fetch_places_semantic(semantic_query, lat, lng, distance)
                             live_events_data = fetch_live_events(location_input if location_input else "nearby", intended_time, group_type, current_date)
                             
-                            st.session_state.current_results = get_ai_recommendations(raw_places, live_events_data, filters_dict, location_context, current_date, user_profile, mode=mode)
+                            st.session_state.current_results = get_ai_recommendations(raw_places, live_events_data, filters_dict, location_context, current_date, user_profile, disliked_spots, mode=mode)
                             st.session_state.current_mode = mode
                     except Exception as e: st.error(f"Error: {e}")
 
-        # Render Results
         if st.session_state.current_results:
             results = st.session_state.current_results
-            mode = st.session_state.current_mode
-            
-            if mode == "get_wild":
-                spot = results.get("recommendations", [])[0]
-                search_term = spot['name'].replace(' ', '+') + f"+{location_input.replace(' ', '+')}"
-                map_url = f"https://www.google.com/maps/search/?api=1&query={search_term}"
-                
-                html_card = f"""
-                <div class="wild-card">
-                    <h4 style="color: #2e7d32; margin-top: 0;">Start Your Adventure</h4>
-                    <h2>{spot['name']}</h2>
-                    <p>📍 <strong>{spot['address']}</strong> | ✨ <i>{spot['vibe_check']}</i></p>
-                    <p style="font-size: 1.1rem; line-height: 1.5;">{spot['why_its_perfect']}</p>
-                    <a href="{map_url}" target="_blank" class="take-me-there-btn">Take me there!</a>
-                </div>
-                """
-                st.markdown(html_card, unsafe_allow_html=True)
-                if st.button("🔖 Save to My List", key=f"save_wild_{spot['name']}"):
-                    save_spot_to_db(st.session_state.user.id, spot['name'], spot['address'], spot.get('category', 'Spontaneous'))
-                
-            else:
-                st.write("### Your Handpicked Spots:")
-                for spot in results.get("recommendations", []):
-                    with st.container():
-                        st.markdown(f"<span style='color: #558b2f; font-weight: 700; text-transform: uppercase; font-size: 0.85rem; letter-spacing: 1px;'>{spot.get('category', 'Top Pick')}</span>", unsafe_allow_html=True)
-                        st.subheader(spot['name'])
-                        st.caption(f"📍 {spot['address']} | ✨ **{spot['vibe_check']}**")
-                        st.write(spot['why_its_perfect'])
-                        
-                        btn_c1, btn_c2 = st.columns([3, 1])
-                        with btn_c1:
-                            search_term = spot['name'].replace(' ', '+') + f"+{location_input.replace(' ', '+')}"
-                            map_url = f"https://www.google.com/maps/search/?api=1&query={search_term}"
-                            st.markdown(f'<a href="{map_url}" target="_blank" class="take-me-there-btn" style="margin-top: 0;">Take me there!</a>', unsafe_allow_html=True)
-                        with btn_c2:
-                            if st.button("🔖 Save", key=f"save_{spot['name']}"):
-                                save_spot_to_db(st.session_state.user.id, spot['name'], spot['address'], spot.get('category', 'Top Pick'))
-                        st.write("---")
+            for spot in results.get("recommendations", []):
+                render_spot_card(spot, location_input, st.session_state.user.id)
+                st.write("---")
 
     # ----------------------------------------
-    # TAB 2: MY PROFILE
+    # TAB 2: MY PROFILE & GAMIFICATION
     # ----------------------------------------
     with tab_profile:
+        current_prof = get_profile(st.session_state.user.id) or {}
+        
+        # Gamification Scoreboard
+        st.markdown(f"### 🏆 Get Wild Tally: **{current_prof.get('wild_tally', 0)}**")
+        st.write("Save spots to increase your tally and build your exploration streak!")
+        st.write("---")
+        
         st.subheader("Personalize Your AI")
         st.write("Set your baseline preferences so the app learns how you like to explore.")
-        
-        current_prof = get_profile(st.session_state.user.id) or {}
         
         with st.form("profile_form"):
             fname = st.text_input("First Name", value=current_prof.get('first_name', ''))
@@ -362,19 +398,15 @@ else:
             
             st.write("Accessibility & Pets:")
             stroller = st.checkbox("Require Stroller Accessibility", value=current_prof.get('needs_stroller_access', False))
-            dog = st.checkbox("Require Dog-Friendly Patios (When 'Outside' is selected)", value=current_prof.get('needs_dog_friendly', False))
+            dog = st.checkbox("Require Dog-Friendly Patios", value=current_prof.get('needs_dog_friendly', False))
             
             st.write("Vibe Check:")
-            vibe_pref = st.text_area("What is your ideal aesthetic? (e.g., 'Warm, modern, naturalistic, quiet')", value=current_prof.get('vibe_preference', ''))
+            vibe_pref = st.text_area("What is your ideal aesthetic? (e.g., 'Warm, modern, naturalistic')", value=current_prof.get('vibe_preference', ''))
             
             if st.form_submit_button("Save Profile", type="primary"):
                 supabase.table('user_profiles').upsert({
-                    'id': st.session_state.user.id,
-                    'first_name': fname,
-                    'partner_name': pname,
-                    'needs_stroller_access': stroller,
-                    'needs_dog_friendly': dog,
-                    'vibe_preference': vibe_pref
+                    'id': st.session_state.user.id, 'first_name': fname, 'partner_name': pname,
+                    'needs_stroller_access': stroller, 'needs_dog_friendly': dog, 'vibe_preference': vibe_pref
                 }).execute()
                 st.success("Profile updated! The AI will now use these rules.")
 
@@ -383,7 +415,7 @@ else:
     # ----------------------------------------
     with tab_saved:
         st.subheader("Your Adventure Ledger")
-        st.write("Rate your past spots. 5-star ratings will train the AI to find similar vibes!")
+        st.write("Rate your past spots. Spots rated 1-star will NEVER be recommended again.")
         
         res = supabase.table('saved_spots').select('*').eq('user_id', st.session_state.user.id).order('saved_at', desc=True).execute()
         saved_spots = res.data if res.data else []
@@ -392,17 +424,16 @@ else:
             st.info("You haven't saved any spots yet. Go explore!")
         else:
             for saved in saved_spots:
-                with st.expander(f"📍 {saved['spot_name']}"):
+                # Add a visual indicator for blacklisted spots
+                icon = "🚫" if saved['rating'] == 1 else "📍"
+                with st.expander(f"{icon} {saved['spot_name']}"):
                     st.caption(saved['address'])
                     
                     with st.form(f"rate_form_{saved['id']}"):
                         current_rating = saved['rating'] if saved['rating'] else 3
-                        new_rating = st.slider("Rate this spot (1-5 Stars)", 1, 5, current_rating)
+                        new_rating = st.slider("Rate this spot (1-5 Stars. 1 = Blacklist)", 1, 5, current_rating)
                         notes = st.text_input("Private Notes", value=saved.get('user_notes', ''))
                         
                         if st.form_submit_button("Update Feedback"):
-                            supabase.table('saved_spots').update({
-                                'rating': new_rating,
-                                'user_notes': notes
-                            }).eq('id', saved['id']).execute()
+                            supabase.table('saved_spots').update({'rating': new_rating, 'user_notes': notes}).eq('id', saved['id']).execute()
                             st.success("Feedback saved!")
