@@ -4,8 +4,10 @@ import json
 import urllib.parse
 import asyncio
 import pandas as pd
+import pydeck as pdk
+import time
 from openai import OpenAI
-from datetime import datetime
+from datetime import datetime, timedelta
 from streamlit_geolocation import streamlit_geolocation
 from supabase import create_client, Client
 from tenacity import retry, wait_exponential, stop_after_attempt
@@ -36,21 +38,26 @@ custom_css = """
     .hero-header { text-align: center; padding: 2rem 0 1rem 0; }
     .hero-title { color: #2e7d32; font-family: 'Helvetica Neue', sans-serif; font-size: 3.5rem; font-weight: 800; letter-spacing: -1px; text-transform: uppercase; margin-bottom: 0; line-height: 1.1; }
     .hero-subtitle { color: #558b2f; font-size: 1.2rem; font-weight: 400; letter-spacing: 1px; margin-top: 10px; }
-    .wild-card { background: #ffffff; border: 1px solid #e0e0e0; border-radius: 16px; overflow: hidden; margin-top: 20px; margin-bottom: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.06); animation: fadeSlideUp 0.8s ease-out forwards; opacity: 0; transform: translateY(20px); }
+    
+    /* Standard Card */
+    .wild-card { background: #ffffff; border: 1px solid #e0e0e0; border-radius: 16px; overflow: hidden; margin-top: 20px; margin-bottom: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.06); animation: fadeSlideUp 0.6s ease-out forwards; }
+    
+    /* GET WILD Premium Card */
+    .get-wild-special { border: 2px solid #FFD700; box-shadow: 0 0 20px rgba(255, 215, 0, 0.4); background: linear-gradient(145deg, #fffdf0, #ffffff); }
+    
     .wild-card-img { width: 100%; height: 220px; object-fit: cover; }
     .wild-card-content { padding: 20px; }
     .spot-category { color: #558b2f; font-weight: 700; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 1px; margin-bottom: 5px; display: block; }
     .spot-title { font-size: 1.5rem; font-weight: 700; color: #1a1a1a; margin-top: 0; margin-bottom: 5px; }
     .spot-meta { font-size: 0.9rem; color: #666; margin-bottom: 15px; }
     .spot-pitch { font-size: 1.05rem; line-height: 1.5; color: #333; margin-bottom: 20px; }
-    .link-row { display: flex; gap: 8px; margin-bottom: 15px; flex-wrap: wrap; }
-    .outbound-link { background-color: #f5f5f5; color: #333 !important; padding: 8px 14px; border-radius: 20px; text-decoration: none; font-size: 0.85rem; font-weight: 600; border: 1px solid #e0e0e0; transition: all 0.2s; }
-    .outbound-link:hover { background-color: #e0e0e0; }
-    .uber-link { background-color: #000000; color: #ffffff !important; border-color: #000000; }
-    .uber-link:hover { background-color: #333333; }
-    .share-link { background-color: #e3f2fd; border-color: #bbdefb; color: #1976d2 !important; }
-    .share-link:hover { background-color: #bbdefb; }
-    @keyframes fadeSlideUp { to { opacity: 1; transform: translateY(0); } }
+    
+    /* Sleek Icon Buttons */
+    .icon-btn-row { display: flex; gap: 15px; margin-bottom: 10px; border-top: 1px solid #eee; padding-top: 15px; }
+    .icon-btn { font-size: 1.6rem; text-decoration: none; transition: transform 0.2s; cursor: pointer; display: inline-block; }
+    .icon-btn:hover { transform: scale(1.15); }
+    
+    @keyframes fadeSlideUp { from {opacity: 0; transform: translateY(20px);} to { opacity: 1; transform: translateY(0); } }
 </style>
 """
 st.markdown(custom_css, unsafe_allow_html=True)
@@ -62,8 +69,6 @@ if 'user' not in st.session_state: st.session_state.user = None
 if 'current_results' not in st.session_state: st.session_state.current_results = None 
 if 'current_mode' not in st.session_state: st.session_state.current_mode = None
 if 'session_seen_spots' not in st.session_state: st.session_state.session_seen_spots = []
-
-# --- NEW: State variables to control the dynamic shuffle flow ---
 if 'trigger_search' not in st.session_state: st.session_state.trigger_search = False
 if 'is_shuffle' not in st.session_state: st.session_state.is_shuffle = False
 
@@ -104,6 +109,27 @@ def get_coordinates(location_query):
         loc = response['results'][0]['geometry']['location']
         return loc['lat'], loc['lng']
     return None, None
+
+def get_local_target_date(lat, lng, day_choice):
+    """Auto-detects the timezone based on coordinates and calculates the exact local target date."""
+    timestamp = int(time.time())
+    url = f"https://maps.googleapis.com/maps/api/timezone/json?location={lat},{lng}&timestamp={timestamp}&key={GOOGLE_API_KEY}"
+    
+    try:
+        res = requests.get(url).json()
+        if res['status'] == 'OK':
+            local_timestamp = timestamp + res['dstOffset'] + res['rawOffset']
+            local_time = datetime.utcfromtimestamp(local_timestamp)
+        else:
+            local_time = datetime.utcnow()
+    except:
+        local_time = datetime.utcnow()
+        
+    if "Tomorrow" in day_choice:
+        target_date = local_time + timedelta(days=1)
+        return target_date.strftime("%A, %B %d, %Y"), "TOMORROW"
+    else:
+        return local_time.strftime("%A, %B %d, %Y"), "TODAY"
 
 def get_live_weather(lat, lng):
     try:
@@ -159,9 +185,9 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
     return response.json().get('places', [])
 
 @st.cache_data(ttl=3600)
-def fetch_live_events(location_name, intended_time, group_type, current_date):
+def fetch_live_events(location_name, intended_time, group_type, target_date_str, relative_day):
     url = "https://api.tavily.com/search"
-    query = f"Find specific local events, live music, festivals, trivia nights, or pop-ups happening on {intended_time} strictly in or near {location_name}. Today's date is {current_date}. List exact event names."
+    query = f"Find events, live music, festivals, or pop-ups happening EXACTLY {relative_day}, {target_date_str}, in {location_name}. Ignore any events happening on other dates."
     payload = {"api_key": TAVILY_API_KEY, "query": query, "search_depth": "basic", "include_answer": True, "max_results": 3}
     try:
         response = requests.post(url, json=payload)
@@ -170,7 +196,7 @@ def fetch_live_events(location_name, intended_time, group_type, current_date):
     except: return "No live event data found."
 
 @retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3))
-def get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_name, current_date, profile, excluded_spots, mode="top_3"):
+def get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_name, target_date_str, relative_day, profile, excluded_spots, mode="top_3"):
     client = OpenAI(api_key=OPENAI_API_KEY)
     
     trimmed_places = raw_places[:8] if isinstance(raw_places, list) and len(raw_places) > 8 else raw_places
@@ -187,7 +213,7 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
 
     instruction = """Select EXACTLY ONE option from the data. Assign it the category: 'Spontaneous Adventure'.""" if mode == "get_wild" else """Return EXACTLY 3 options from the data, structured strictly as:
         1. The Crowd-Pleaser: Established, highly-rated, local favorite.
-        2. The Fresh Take / Live Event: You MUST heavily prioritize the 'LIVE WEB SEARCH EVENTS' data.
+        2. The Fresh Take / Live Event: Prioritize the 'LIVE WEB SEARCH EVENTS' data.
         3. The Hidden Gem: A spot that feels unique."""
 
     system_prompt = f"""
@@ -196,22 +222,22 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
     CRITICAL CONTEXT:
     - User Location: {location_name}
     - CURRENT WEATHER: {weather_report}
-    - Today's Date: {current_date}
+    - TARGET EVENT DATE: {target_date_str} ({relative_day})
     - User Intended Time: {filters_dict['time']}
     - Session Profile: {filters_dict['group']} looking for {filters_dict['food']} in a {filters_dict['vibe']} setting.
-    - SPECIAL REQUEST: "{filters_dict.get('specific') if filters_dict.get('specific') else 'None'}"
     {profile_context}
     {blacklist_context}
     
-    GEOGRAPHY, WEATHER & HALLUCINATION SHACKLES:
-    1. WEATHER PIVOT: If weather report indicates RAIN, SNOW, or TEMP < 45°F, prioritize indoor venues or those with heated patios.
-    2. DO NOT INVENT PLACES. Must be in the provided data.
-    3. STRICT GEOGRAPHY: Must be physically in or immediately bordering {location_name}.
+    GEOGRAPHY, WEATHER & EVENT SHACKLES:
+    1. STRICT EVENT DATES: If recommending a live event or festival, verify it is happening {relative_day} ({target_date_str}). Do not recommend events on other dates. Include the EVENT TIME and VENUE in the description!
+    2. WEATHER PIVOT: If weather report indicates RAIN, SNOW, or TEMP < 45°F, prioritize indoor venues or those with heated patios.
+    3. DO NOT INVENT PLACES. Must be in the provided data.
+    4. Provide approximate lat/lng for live events based on the city if exact coordinates are missing.
     
     {instruction}
     
     Return STRICTLY as a JSON object with a 'recommendations' array containing:
-    'name', 'category', 'address', 'why_its_perfect' (2 sentences), 'vibe_check' (3 words), 'website' (URL if available in data, otherwise empty string), 'photo_ref' (The string from places.photos[0].name if available, otherwise empty), 'lat' (float of latitude), and 'lng' (float of longitude). Provide approximate lat/lng for live events based on city.
+    'name', 'category', 'address', 'why_its_perfect' (2 sentences incorporating event time/location if applicable), 'vibe_check' (3 words), 'website' (URL if available in data, otherwise empty string), 'photo_ref' (The string from places.photos[0].name if available, otherwise empty), 'lat' (float), and 'lng' (float).
     """
 
     response = client.chat.completions.create(
@@ -225,7 +251,10 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
     )
     return json.loads(response.choices[0].message.content)
 
-def render_spot_card(spot, location_input, user_id):
+def render_spot_card(spot, location_input, user_id, index, mode):
+    title_prefix = f"{index}." if mode == "top_3" else "🎲"
+    special_class = "get-wild-special" if mode == "get_wild" else ""
+
     search_term = spot['name'].replace(' ', '+') + f"+{location_input.replace(' ', '+')}"
     map_url = f"https://www.google.com/maps/search/?api=1&query={search_term}"
     encoded_address = urllib.parse.quote(spot['address'])
@@ -250,22 +279,22 @@ def render_spot_card(spot, location_input, user_id):
             img_url = "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80" 
             
     img_html = f'<img src="{img_url}" class="wild-card-img">'
-    website_html = f'<a href="{spot["website"]}" target="_blank" class="outbound-link">🌐 Website</a>' if spot.get('website') else ""
+    website_icon = f'<a href="{spot["website"]}" target="_blank" class="icon-btn" title="Visit Website">🌐</a>' if spot.get('website') else ""
 
     html_card = f"""
-<div class="wild-card">
+<div class="wild-card {special_class}">
 {img_html}
 <div class="wild-card-content">
 <span class="spot-category">{spot.get('category', 'Top Pick')}</span>
-<h2 class="spot-title">{spot['name']}</h2>
+<h2 class="spot-title">{title_prefix} {spot['name']}</h2>
 <div class="spot-meta">📍 {spot['address']} | ✨ <b>{spot['vibe_check']}</b></div>
 <p class="spot-pitch">{spot['why_its_perfect']}</p>
-<div class="link-row">
-<a href="{map_url}" target="_blank" class="outbound-link">🗺️ Maps</a>
-{website_html}
-<a href="{uber_url}" target="_blank" class="outbound-link uber-link">🚗 Uber</a>
-<a href="{sms_url}" class="outbound-link share-link">💬 Text</a>
-<a href="{email_url}" class="outbound-link share-link">✉️ Email</a>
+<div class="icon-btn-row">
+<a href="{map_url}" target="_blank" class="icon-btn" title="View on Maps">🗺️</a>
+{website_icon}
+<a href="{uber_url}" target="_blank" class="icon-btn" title="Ride with Uber">🚗</a>
+<a href="{sms_url}" class="icon-btn" title="Share via Text">💬</a>
+<a href="{email_url}" class="icon-btn" title="Share via Email">✉️</a>
 </div>
 </div>
 </div>
@@ -283,10 +312,10 @@ def render_spot_card(spot, location_input, user_id):
 # ==========================================
 # 5. ASYNC DATA GATHERER 
 # ==========================================
-async def gather_all_data(lat, lng, semantic_query, distance, location_input, intended_time, group_type, current_date):
+async def gather_all_data(lat, lng, semantic_query, distance, location_input, intended_time, group_type, target_date_str, relative_day):
     weather_task = asyncio.to_thread(get_live_weather, lat, lng)
     places_task = asyncio.to_thread(fetch_places_semantic, semantic_query, lat, lng, distance)
-    events_task = asyncio.to_thread(fetch_live_events, location_input if location_input else "nearby", intended_time, group_type, current_date)
+    events_task = asyncio.to_thread(fetch_live_events, location_input if location_input else "nearby", intended_time, group_type, target_date_str, relative_day)
     return await asyncio.gather(weather_task, places_task, events_task)
 
 # ==========================================
@@ -378,7 +407,6 @@ else:
 
         st.write("---")
         
-        # UI: Core Buttons (No permanent shuffle button here!)
         btn_col1, btn_col2 = st.columns(2)
         with btn_col1: top_3_clicked = st.button("🌟 Top 3 Recommendations", use_container_width=True)
         with btn_col2: get_wild_clicked = st.button("🎲 GET WILD", type="primary", use_container_width=True)
@@ -393,78 +421,91 @@ else:
             st.session_state.current_mode = "get_wild"
 
         if st.session_state.trigger_search:
-            st.session_state.trigger_search = False # Instantly reset the trigger
+            st.session_state.trigger_search = False 
             
             if not st.session_state.is_shuffle:
-                # If they clicked the primary buttons, clear the shuffle memory for a fresh search!
                 st.session_state.session_seen_spots = []
                 
             if not location_input and not gps_active:
                 st.warning("Please enter a location or click the GPS icon first!")
             else:
-                with st.status("Scouting the wild...", expanded=True) as status:
-                    try:
-                        current_date = datetime.now().strftime("%A, %B %d, %Y")
-                        location_context = location_input
+                status_loader = st.empty()
+                status_loader.info("📍 Locking in coordinates and scanning local APIs...")
+                
+                try:
+                    location_context = location_input
+                    
+                    if gps_active:
+                        lat, lng = geo_data['latitude'], geo_data['longitude']
+                        location_context = "exact GPS coordinates"
+                    else:
+                        lat, lng = get_coordinates(location_input)
+                    
+                    if lat is None: 
+                        status_loader.error("Couldn't find that location.")
+                    else:
+                        # Auto-detect local time to verify Today vs Tomorrow!
+                        target_date_str, relative_day = get_local_target_date(lat, lng, day_choice)
                         
-                        st.write("📍 Getting coordinates...")
-                        if gps_active:
-                            lat, lng = geo_data['latitude'], geo_data['longitude']
-                            location_context = "exact GPS coordinates"
-                        else:
-                            lat, lng = get_coordinates(location_input)
+                        semantic_query = build_semantic_query(filters_dict, user_profile)
                         
-                        if lat is None: 
-                            st.error("Couldn't find that location.")
-                            status.update(label="Location Error", state="error")
-                        else:
-                            st.write("☁️ Fetching live weather, places, and local events...")
-                            semantic_query = build_semantic_query(filters_dict, user_profile)
-                            
-                            weather_report, raw_places, live_events_data = asyncio.run(
-                                gather_all_data(lat, lng, semantic_query, distance, location_input, intended_time, group_type, current_date)
-                            )
-                            
-                            st.write("🧠 The AI is assembling your perfect itinerary...")
-                            
-                            db_excluded = get_excluded_spots(st.session_state.user.id)
-                            all_excluded = list(set(db_excluded + st.session_state.session_seen_spots))
-                            
-                            st.session_state.current_results = get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_context, current_date, user_profile, all_excluded, mode=st.session_state.current_mode)
-                            
-                            for rec in st.session_state.current_results.get("recommendations", []):
-                                st.session_state.session_seen_spots.append(rec['name'])
+                        weather_report, raw_places, live_events_data = asyncio.run(
+                            gather_all_data(lat, lng, semantic_query, distance, location_input, intended_time, group_type, target_date_str, relative_day)
+                        )
+                        
+                        status_loader.info("🧠 AI is curating your perfect itinerary...")
+                        
+                        db_excluded = get_excluded_spots(st.session_state.user.id)
+                        all_excluded = list(set(db_excluded + st.session_state.session_seen_spots))
+                        
+                        st.session_state.current_results = get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_context, target_date_str, relative_day, user_profile, all_excluded, mode=st.session_state.current_mode)
+                        
+                        for rec in st.session_state.current_results.get("recommendations", []):
+                            st.session_state.session_seen_spots.append(rec['name'])
 
-                            status.update(label="Itinerary Ready!", state="complete", expanded=False)
-                    except Exception as e: 
-                        st.error(f"Error communicating with AI. ({e})")
-                        status.update(label="An error occurred", state="error")
+                        status_loader.success("✅ Itinerary Ready!")
+                except Exception as e: 
+                    status_loader.error(f"Error communicating with AI. ({e})")
 
         if st.session_state.current_results:
             st.write("---")
             results = st.session_state.current_results
+            mode = st.session_state.current_mode
             
+            # --- PYDECK INTERACTIVE MAP WITH HOVER TOOLTIPS ---
             map_data = []
-            for spot in results.get("recommendations", []):
+            for i, spot in enumerate(results.get("recommendations", [])):
                 if spot.get('lat') and spot.get('lng'):
-                    map_data.append({"lat": spot['lat'], "lon": spot['lng'], "name": spot['name']})
+                    display_name = f"{i+1}. {spot['name']}" if mode == "top_3" else f"🎲 {spot['name']}"
+                    map_data.append({"lat": spot['lat'], "lon": spot['lng'], "name": display_name})
             
             if map_data:
                 with st.expander("🗺️ View on Map"):
-                    st.map(pd.DataFrame(map_data), zoom=12)
+                    layer = pdk.Layer(
+                        'ScatterplotLayer',
+                        data=map_data,
+                        get_position='[lon, lat]',
+                        get_color='[255, 75, 75, 200]',
+                        get_radius=250,
+                        pickable=True,
+                    )
+                    view_state = pdk.ViewState(latitude=map_data[0]['lat'], longitude=map_data[0]['lon'], zoom=12)
+                    st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip={"html": "<b>{name}</b>"}))
             
-            for spot in results.get("recommendations", []):
-                render_spot_card(spot, location_input, st.session_state.user.id)
+            # --- RENDER CARDS ---
+            for index, spot in enumerate(results.get("recommendations", [])):
+                render_spot_card(spot, location_input, st.session_state.user.id, index + 1, mode)
                 st.write("---")
                 
-            # --- THE DYNAMIC SHUFFLE BUTTON ---
-            if st.button("🔀 Not feeling these? Show me 3 different spots", use_container_width=True):
-                st.session_state.trigger_search = True
-                st.session_state.is_shuffle = True
-                st.rerun()
+            # --- SHUFFLE BUTTON (ONLY IN TOP 3 MODE) ---
+            if mode == "top_3":
+                if st.button("🔀 Shuffle", use_container_width=True):
+                    st.session_state.trigger_search = True
+                    st.session_state.is_shuffle = True
+                    st.rerun()
 
     # ----------------------------------------
-    # TAB 2 & 3: PROFILE & SAVED SPOTS (Unchanged)
+    # TAB 2 & 3: PROFILE & SAVED SPOTS 
     # ----------------------------------------
     with tab_profile:
         current_prof = get_profile(st.session_state.user.id) or {}
