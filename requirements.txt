@@ -1,5 +1,7 @@
 streamlit
 requests
+pandas
 openai
 streamlit-geolocation
 supabase
+tenacity
