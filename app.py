@@ -10,7 +10,7 @@ from streamlit_geolocation import streamlit_geolocation
 # ==========================================
 GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
-TAVILY_API_KEY = st.secrets["TAVILY_API_KEY"] # NEW: The Web Scraper Key
+TAVILY_API_KEY = st.secrets["TAVILY_API_KEY"]
 
 # ==========================================
 # 2. CUSTOM CSS & STYLING
@@ -26,13 +26,12 @@ custom_css = """
     .take-me-there-btn:hover { background-color: #1b5e20; box-shadow: 0 4px 12px rgba(46, 125, 50, 0.3); }
     .wild-card { background: linear-gradient(135deg, #f1f8e9 0%, #dcedc8 100%); border-left: 6px solid #558b2f; border-radius: 12px; padding: 25px; margin-top: 20px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); animation: fadeSlideUp 0.8s ease-out forwards; opacity: 0; transform: translateY(20px); }
     @keyframes fadeSlideUp { to { opacity: 1; transform: translateY(0); } }
-    div[role="radiogroup"] { gap: 1rem; }
 </style>
 """
 st.markdown(custom_css, unsafe_allow_html=True)
 
 # ==========================================
-# 3. HELPER FUNCTIONS (The V3 Agentic Engine)
+# 3. HELPER FUNCTIONS (The Engine)
 # ==========================================
 def get_coordinates(location_query):
     url = f"https://maps.googleapis.com/maps/api/geocode/json?address={location_query}&key={GOOGLE_API_KEY}"
@@ -83,11 +82,10 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
         raise Exception(f"Google API Error: {response.text}")
     return response.json().get('places', [])
 
-# --- NEW: The Agentic Web Scraper ---
-def fetch_live_events(location_name, intended_time, group_type):
-    """Uses Tavily to scrape the web for local events happening at the intended time."""
+def fetch_live_events(location_name, intended_time, group_type, current_date):
     url = "https://api.tavily.com/search"
-    query = f"What fun local events, live music, pop-ups, or specials are happening {intended_time} near {location_name} for a {group_type}?"
+    # Added strict location and date to the search query to stop WA/GA bleed
+    query = f"What fun local events, live music, or specials are happening on {intended_time} strictly in or near {location_name} for a {group_type}? Today is {current_date}."
     
     payload = {
         "api_key": TAVILY_API_KEY,
@@ -96,18 +94,16 @@ def fetch_live_events(location_name, intended_time, group_type):
         "include_answer": True,
         "max_results": 3
     }
-    
     try:
         response = requests.post(url, json=payload)
         data = response.json()
-        # Returns a synthesized summary of the web search
         answer = data.get("answer", "")
         context = " ".join([res.get("content", "") for res in data.get("results", [])])
         return f"TAVILY AI WEB SEARCH SUMMARY: {answer} \n\nRAW WEB CONTEXT: {context}"
     except Exception as e:
-        return "No live event data found on the web."
+        return "No live event data found."
 
-def get_ai_recommendations(raw_places, live_events_data, filters_dict, location_name, mode="top_3"):
+def get_ai_recommendations(raw_places, live_events_data, filters_dict, location_name, current_date, mode="top_3"):
     client = OpenAI(api_key=OPENAI_API_KEY)
     intended_time = filters_dict['time']
     specific_request = filters_dict.get('specific', '')
@@ -122,33 +118,33 @@ def get_ai_recommendations(raw_places, live_events_data, filters_dict, location_
         instruction = """
         Return EXACTLY 3 options from the data, structured strictly as:
         1. The Crowd-Pleaser: Established, highly-rated, local favorite.
-        2. The Fresh Take / Live Event: You MUST use the 'LIVE WEB SEARCH EVENTS' data to recommend something happening *specifically* at the user's intended time (e.g., a trivia night, live band, or local festival). If the web search found nothing good, pick a trendy, experiential place from the Google data instead.
-        3. The Hidden Gem: A spot that feels off the beaten path, unique, or known mostly to locals.
+        2. The Fresh Take / Live Event: Check the 'LIVE WEB SEARCH EVENTS'. If there is a valid, local event happening, feature it here. If not, pick a trendy place from Google.
+        3. The Hidden Gem: A spot that feels unique. If you cannot find a true hidden gem in the provided data, just pick the most interesting real place available. Do NOT invent one.
         """
 
     system_prompt = f"""
     You are a luxury local concierge for an app called 'Get Wild'.
     
     CRITICAL CONTEXT:
+    - User Location: {location_name}
+    - Today's Date: {current_date}
     - User Intended Time: {intended_time}
     - User Profile: {filters_dict['group']} looking for {filters_dict['food']} in a {filters_dict['vibe']} setting.
     - SPECIAL REQUEST: "{specific_request if specific_request else 'None'}"
     
+    GEOGRAPHY & HALLUCINATION SHACKLES (MANDATORY):
+    1. DO NOT INVENT PLACES. If a place is not explicitly in the 'GOOGLE PLACES DATA' or 'LIVE WEB SEARCH EVENTS', you cannot recommend it. (e.g., Do not invent a 'Local Secret Bistro').
+    2. STRICT GEOGRAPHY: The location MUST be physically located in or immediately bordering {location_name}. If the web search returned an event in a different state (like WA or GA), IGNORE IT.
+    3. STRICT TIME: Compare 'Today's Date' to the events. If an event is on March 22nd, and the user asked for 'Tomorrow', do not recommend it.
+    
     DATA SOURCES:
     1. GOOGLE PLACES DATA: A list of established local venues.
-    2. LIVE WEB SEARCH EVENTS: Live data scraped from the web about things happening right now.
-    
-    SPECIAL REQUEST MANDATE:
-    If a SPECIAL REQUEST is provided, it is your absolute highest priority. 
-    
-    ANTI-HALLUCINATION PROTOCOL:
-    1. ONLY recommend places from the provided JSON or the Web Search data. Do not invent places or events.
-    2. Severely penalize massive corporate chains.
+    2. LIVE WEB SEARCH EVENTS: Live data scraped from the web.
     
     {instruction}
     
     Return STRICTLY as a JSON object with a 'recommendations' array containing:
-    'name', 'category', 'address', 'why_its_perfect' (2 sentences proving why it fits their filters. If it's a live event, explicitly mention what the event is!), and 'vibe_check' (3 words).
+    'name', 'category', 'address', 'why_its_perfect' (2 sentences proving why it fits. If it's a live event, state the date/time!), and 'vibe_check' (3 words).
     """
 
     response = client.chat.completions.create(
@@ -189,13 +185,17 @@ if geo_data and geo_data.get('latitude') is not None:
 st.write("---")
 st.subheader("What's the plan?")
 
+# --- NEW UX: Sleek Binary Toggles ---
 col_day, col_time = st.columns(2)
 with col_day:
-    day_toggle = st.radio("Day?", ["Today", "Tomorrow"], horizontal=True)
+    is_tomorrow = st.toggle("📅 Tomorrow instead of Today")
 with col_time:
-    time_toggle = st.radio("Time?", ["Daytime", "Night"], horizontal=True)
+    is_night = st.toggle("🌙 Night instead of Daytime")
 
-intended_time = f"{day_toggle} ({time_toggle})"
+day_str = "Tomorrow" if is_tomorrow else "Today"
+time_str = "Night" if is_night else "Daytime"
+intended_time = f"{day_str} ({time_str})"
+
 st.write("") 
 
 col_group, col_vibe = st.columns(2)
@@ -236,69 +236,63 @@ with btn_col2:
 if top_3_clicked or get_wild_clicked:
     mode = "get_wild" if get_wild_clicked else "top_3"
     
-    if get_wild_clicked:
-        st.balloons()
-    
     if not location_input and not gps_active:
         st.warning("Please enter a location or click the GPS icon first!")
     else:
-        # Changed st.spinner to st.status for better progressive UX loading
-        with st.status("Scouting the wild...", expanded=True) as status:
+        # UX FIX: Reverted to a simple, clean spinner. No clicking required.
+        with st.spinner("Scouting the wild..."):
             try:
+                # Grab exact current date to prevent AI time-travel hallucinations
+                current_date = datetime.now().strftime("%A, %B %d, %Y")
+                
                 location_context = location_input
                 if gps_active:
                     lat, lng = geo_data['latitude'], geo_data['longitude']
                     location_context = "their exact GPS coordinates"
                 else:
-                    st.write("📍 Converting location to GPS...")
                     lat, lng = get_coordinates(location_input)
                 
                 if lat is None:
-                    status.update(label="Location error", state="error")
                     st.error("Couldn't find that location.")
                 else:
-                    st.write("🏢 Checking local venues via Google...")
                     semantic_query = build_semantic_query(filters_dict)
                     raw_places = fetch_places_semantic(semantic_query, lat, lng, distance)
                     
-                    st.write("🌍 Scanning the local web for live events...")
-                    live_events_data = fetch_live_events(location_input if location_input else "nearby", intended_time, group_type)
+                    live_events_data = fetch_live_events(location_input if location_input else "nearby", intended_time, group_type, current_date)
                     
-                    st.write("🧠 Curating your perfect outing...")
-                    results = get_ai_recommendations(raw_places, live_events_data, filters_dict, location_context, mode=mode)
+                    results = get_ai_recommendations(raw_places, live_events_data, filters_dict, location_context, current_date, mode=mode)
                     
-                    status.update(label="Ready to go!", state="complete", expanded=False)
-                    
-                    if mode == "get_wild":
-                        spot = results.get("recommendations", [])[0]
+        # UX FIX: Results render immediately outside the spinner. No clicks needed.
+        if 'results' in locals():
+            if mode == "get_wild":
+                spot = results.get("recommendations", [])[0]
+                search_term = spot['name'].replace(' ', '+') + f"+{location_input.replace(' ', '+')}"
+                map_url = f"https://www.google.com/maps/search/?api=1&query={search_term}"
+                
+                html_card = f"""
+                <div class="wild-card">
+                    <h4 style="color: #2e7d32; margin-top: 0;">Start Your Adventure</h4>
+                    <h2>{spot['name']}</h2>
+                    <p>📍 <strong>{spot['address']}</strong> | ✨ <i>{spot['vibe_check']}</i></p>
+                    <p style="font-size: 1.1rem; line-height: 1.5;">{spot['why_its_perfect']}</p>
+                    <a href="{map_url}" target="_blank" class="take-me-there-btn">Take me there!</a>
+                </div>
+                """
+                st.markdown(html_card, unsafe_allow_html=True)
+                
+            else:
+                st.write("### Your Handpicked Spots:")
+                for spot in results.get("recommendations", []):
+                    with st.container():
+                        st.markdown(f"<span style='color: #558b2f; font-weight: 700; text-transform: uppercase; font-size: 0.85rem; letter-spacing: 1px;'>{spot.get('category', 'Top Pick')}</span>", unsafe_allow_html=True)
+                        st.subheader(spot['name'])
+                        st.caption(f"📍 {spot['address']} | ✨ **{spot['vibe_check']}**")
+                        st.write(spot['why_its_perfect'])
+                        
                         search_term = spot['name'].replace(' ', '+') + f"+{location_input.replace(' ', '+')}"
                         map_url = f"https://www.google.com/maps/search/?api=1&query={search_term}"
-                        
-                        html_card = f"""
-                        <div class="wild-card">
-                            <h4 style="color: #2e7d32; margin-top: 0;">Start Your Adventure</h4>
-                            <h2>{spot['name']}</h2>
-                            <p>📍 <strong>{spot['address']}</strong> | ✨ <i>{spot['vibe_check']}</i></p>
-                            <p style="font-size: 1.1rem; line-height: 1.5;">{spot['why_its_perfect']}</p>
-                            <a href="{map_url}" target="_blank" class="take-me-there-btn">Take me there!</a>
-                        </div>
-                        """
-                        st.markdown(html_card, unsafe_allow_html=True)
-                        
-                    else:
-                        st.write("### Your Handpicked Spots:")
-                        for spot in results.get("recommendations", []):
-                            with st.container():
-                                st.markdown(f"<span style='color: #558b2f; font-weight: 700; text-transform: uppercase; font-size: 0.85rem; letter-spacing: 1px;'>{spot.get('category', 'Top Pick')}</span>", unsafe_allow_html=True)
-                                st.subheader(spot['name'])
-                                st.caption(f"📍 {spot['address']} | ✨ **{spot['vibe_check']}**")
-                                st.write(spot['why_its_perfect'])
-                                
-                                search_term = spot['name'].replace(' ', '+') + f"+{location_input.replace(' ', '+')}"
-                                map_url = f"https://www.google.com/maps/search/?api=1&query={search_term}"
-                                st.markdown(f'<a href="{map_url}" target="_blank" class="take-me-there-btn">Take me there!</a>', unsafe_allow_html=True)
-                                st.write("---")
-                            
-            except Exception as e:
-                status.update(label="Error encountered", state="error")
-                st.error(f"Whoops! Something went wrong out in the wild: {e}")
+                        st.markdown(f'<a href="{map_url}" target="_blank" class="take-me-there-btn">Take me there!</a>', unsafe_allow_html=True)
+                        st.write("---")
+            
+        except Exception as e:
+            st.error(f"Whoops! Something went wrong out in the wild: {e}")
