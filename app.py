@@ -239,10 +239,12 @@ if top_3_clicked or get_wild_clicked:
     if not location_input and not gps_active:
         st.warning("Please enter a location or click the GPS icon first!")
     else:
-        # UX FIX: Reverted to a simple, clean spinner. No clicking required.
+        results = None # Initialize empty results
+        
+        # Phase 1: The Loading Spinner (Fetching Data)
         with st.spinner("Scouting the wild..."):
             try:
-                # Grab exact current date to prevent AI time-travel hallucinations
+                # Grab exact current date to prevent AI time-travel
                 current_date = datetime.now().strftime("%A, %B %d, %Y")
                 
                 location_context = location_input
@@ -262,8 +264,11 @@ if top_3_clicked or get_wild_clicked:
                     
                     results = get_ai_recommendations(raw_places, live_events_data, filters_dict, location_context, current_date, mode=mode)
                     
-        # UX FIX: Results render immediately outside the spinner. No clicks needed.
-        if 'results' in locals():
+            except Exception as e:
+                st.error(f"Whoops! Something went wrong out in the wild: {e}")
+                
+        # Phase 2: The Render (Outside the spinner, no clicks needed!)
+        if results:
             if mode == "get_wild":
                 spot = results.get("recommendations", [])[0]
                 search_term = spot['name'].replace(' ', '+') + f"+{location_input.replace(' ', '+')}"
@@ -293,6 +298,3 @@ if top_3_clicked or get_wild_clicked:
                         map_url = f"https://www.google.com/maps/search/?api=1&query={search_term}"
                         st.markdown(f'<a href="{map_url}" target="_blank" class="take-me-there-btn">Take me there!</a>', unsafe_allow_html=True)
                         st.write("---")
-            
-        except Exception as e:
-            st.error(f"Whoops! Something went wrong out in the wild: {e}")
