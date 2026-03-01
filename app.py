@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 import json
 import urllib.parse
@@ -58,6 +59,18 @@ custom_css = """
 """
 st.markdown(custom_css, unsafe_allow_html=True)
 
+def scroll_to_top():
+    """Injects a tiny JS snippet to instantly force the UI back to the top of the page."""
+    components.html(
+        """
+        <script>
+            var body = window.parent.document.querySelector(".main");
+            if (body) { body.scrollTop = 0; }
+        </script>
+        """,
+        height=0
+    )
+
 # ==========================================
 # 3. SESSION STATE & DATABASE HELPERS
 # ==========================================
@@ -67,6 +80,16 @@ if 'current_mode' not in st.session_state: st.session_state.current_mode = None
 if 'session_seen_spots' not in st.session_state: st.session_state.session_seen_spots = []
 if 'search_active' not in st.session_state: st.session_state.search_active = False
 if 'trigger_fetch' not in st.session_state: st.session_state.trigger_fetch = False
+
+# Setup default form values so they can be remembered
+if 'loc_input' not in st.session_state: st.session_state.loc_input = ""
+if 'day_choice' not in st.session_state: st.session_state.day_choice = "☀️ Today"
+if 'time_choice' not in st.session_state: st.session_state.time_choice = "🌙 Night"
+if 'group_type' not in st.session_state: st.session_state.group_type = "Date"
+if 'vibe' not in st.session_state: st.session_state.vibe = "Doesn't Matter"
+if 'food_pref' not in st.session_state: st.session_state.food_pref = "Full Meal"
+if 'dist' not in st.session_state: st.session_state.dist = 5
+if 'specific' not in st.session_state: st.session_state.specific = ""
 
 def get_profile(user_id):
     try:
@@ -160,7 +183,7 @@ def build_semantic_query(filters_dict, profile):
             
     return f"{modifier_str} {base}".strip()
 
-@st.cache_data(ttl=3600)
+# Removed the cache decorator to fix the Threading/Session crash
 def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
     url = "https://places.googleapis.com/v1/places:searchText"
     headers = {
@@ -178,7 +201,7 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
     if response.status_code != 200: raise Exception(f"Google API Error: {response.text}")
     return response.json().get('places', [])
 
-@st.cache_data(ttl=3600)
+# Removed the cache decorator to fix the Threading/Session crash
 def fetch_live_events(location_name, intended_time, group_type, target_date_str, relative_day):
     url = "https://api.tavily.com/search"
     query = f"Find events, live music, festivals, or pop-ups happening EXACTLY {relative_day}, {target_date_str}, in {location_name}. Ignore any events happening on other dates."
@@ -244,7 +267,6 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
         max_tokens=1000 
     )
     
-    # 🐛 FIX: Robust Markdown Stripper to prevent JSON Decode errors
     raw_content = response.choices[0].message.content.strip()
     if raw_content.startswith("```json"):
         raw_content = raw_content[7:-3].strip()
@@ -378,7 +400,8 @@ else:
         if not st.session_state.search_active:
             st.subheader("Where are we going?")
             loc_col1, loc_col2 = st.columns([5, 1])
-            with loc_col1: st.session_state.loc_input = st.text_input("Location", value=st.session_state.get('loc_input', ''), placeholder="Enter City or ZIP Code (e.g., Fairfax, VA)", label_visibility="collapsed")
+            # Bind inputs to session_state using the key parameter
+            with loc_col1: st.text_input("Location", key="loc_input", placeholder="Enter City or ZIP Code", label_visibility="collapsed")
             with loc_col2: geo_data = streamlit_geolocation()
 
             gps_active = False
@@ -390,22 +413,22 @@ else:
             st.subheader("What's the plan?")
 
             col_day, col_time = st.columns(2)
-            with col_day: st.session_state.day_choice = st.radio("Day", ["☀️ Today", "📅 Tomorrow"], horizontal=True, label_visibility="collapsed")
-            with col_time: st.session_state.time_choice = st.radio("Time", ["☀️ Daytime", "🌙 Night"], horizontal=True, label_visibility="collapsed")
+            with col_day: st.radio("Day", ["☀️ Today", "📅 Tomorrow"], key="day_choice", horizontal=True, label_visibility="collapsed")
+            with col_time: st.radio("Time", ["☀️ Daytime", "🌙 Night"], key="time_choice", horizontal=True, label_visibility="collapsed")
             intended_time = f"{st.session_state.day_choice} ({st.session_state.time_choice})"
 
             st.write("") 
             col_group, col_vibe = st.columns(2)
-            with col_group: st.session_state.group_type = st.selectbox("Who is going?", ["Date", "Family Outing", "Friends", "Solo"])
-            with col_vibe: st.session_state.vibe = st.radio("Setting?", ["Doesn't Matter", "Outside", "Inside"], horizontal=True)
+            with col_group: st.selectbox("Who is going?", ["Date", "Family Outing", "Friends", "Solo"], key="group_type")
+            with col_vibe: st.radio("Setting?", ["Doesn't Matter", "Outside", "Inside"], key="vibe", horizontal=True)
             
             st.write("") 
             col_food, col_dist = st.columns(2)
-            with col_food: st.session_state.food_pref = st.selectbox("Sustenance?", ["Full Meal", "Just Drinks/Coffee", "No Food Needed"])
-            with col_dist: st.session_state.dist = st.slider("Max Distance (Miles)", 1, 20, 5)
+            with col_food: st.selectbox("Sustenance?", ["Full Meal", "Just Drinks/Coffee", "No Food Needed"], key="food_pref")
+            with col_dist: st.slider("Max Distance (Miles)", 1, 20, 5, key="dist")
 
             with st.expander("Need something specific? (Optional)", expanded=False):
-                st.session_state.specific = st.text_input("Keyword", placeholder="e.g., 'live jazz', 'vegan options'", label_visibility="collapsed")
+                st.text_input("Keyword", key="specific", placeholder="e.g., 'live jazz', 'vegan options'", label_visibility="collapsed")
 
             st.write("---")
             
@@ -417,7 +440,6 @@ else:
                 if not st.session_state.loc_input and not gps_active:
                     st.warning("Please enter a location or click the GPS icon first!")
                 else:
-                    # Save state and trigger transition
                     st.session_state.current_mode = "get_wild" if get_wild_clicked else "top_3"
                     st.session_state.filters_dict = {
                         "group": st.session_state.group_type, "time": intended_time, 
@@ -428,11 +450,14 @@ else:
                     st.session_state.trigger_fetch = True
                     st.session_state.gps_active = gps_active
                     st.session_state.geo_data = geo_data
-                    st.session_state.session_seen_spots = [] # Clear slate
+                    st.session_state.session_seen_spots = [] 
                     st.rerun()
 
         # --- SCREEN 2: THE RESULTS & LOADER ---
         else:
+            # Inject the Auto-Scroll Component
+            scroll_to_top()
+            
             if st.button("← Start a Fresh Search"):
                 st.session_state.search_active = False
                 st.session_state.current_results = None
@@ -488,7 +513,6 @@ else:
                         else:
                             status_loader.success("✅ Itinerary Ready!")
                 except Exception as e: 
-                    # Providing exact error info if json fails
                     error_type = type(e).__name__
                     status_loader.error(f"Error connecting to the wild. ({error_type}: {e})")
 
