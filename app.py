@@ -39,10 +39,7 @@ custom_css = """
     .hero-title { color: #2e7d32; font-family: 'Helvetica Neue', sans-serif; font-size: 3.5rem; font-weight: 800; letter-spacing: -1px; text-transform: uppercase; margin-bottom: 0; line-height: 1.1; }
     .hero-subtitle { color: #558b2f; font-size: 1.2rem; font-weight: 400; letter-spacing: 1px; margin-top: 10px; }
     
-    /* Standard Card */
     .wild-card { background: #ffffff; border: 1px solid #e0e0e0; border-radius: 16px; overflow: hidden; margin-top: 20px; margin-bottom: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.06); animation: fadeSlideUp 0.6s ease-out forwards; }
-    
-    /* GET WILD Premium Card */
     .get-wild-special { border: 2px solid #FFD700; box-shadow: 0 0 20px rgba(255, 215, 0, 0.4); background: linear-gradient(145deg, #fffdf0, #ffffff); }
     
     .wild-card-img { width: 100%; height: 220px; object-fit: cover; }
@@ -52,7 +49,6 @@ custom_css = """
     .spot-meta { font-size: 0.9rem; color: #666; margin-bottom: 15px; }
     .spot-pitch { font-size: 1.05rem; line-height: 1.5; color: #333; margin-bottom: 20px; }
     
-    /* Sleek Icon Buttons */
     .icon-btn-row { display: flex; gap: 15px; margin-bottom: 10px; border-top: 1px solid #eee; padding-top: 15px; }
     .icon-btn { font-size: 1.6rem; text-decoration: none; transition: transform 0.2s; cursor: pointer; display: inline-block; }
     .icon-btn:hover { transform: scale(1.15); }
@@ -69,8 +65,8 @@ if 'user' not in st.session_state: st.session_state.user = None
 if 'current_results' not in st.session_state: st.session_state.current_results = None 
 if 'current_mode' not in st.session_state: st.session_state.current_mode = None
 if 'session_seen_spots' not in st.session_state: st.session_state.session_seen_spots = []
-if 'trigger_search' not in st.session_state: st.session_state.trigger_search = False
-if 'is_shuffle' not in st.session_state: st.session_state.is_shuffle = False
+if 'search_active' not in st.session_state: st.session_state.search_active = False
+if 'trigger_fetch' not in st.session_state: st.session_state.trigger_fetch = False
 
 def get_profile(user_id):
     try:
@@ -111,10 +107,8 @@ def get_coordinates(location_query):
     return None, None
 
 def get_local_target_date(lat, lng, day_choice):
-    """Auto-detects the timezone based on coordinates and calculates the exact local target date."""
     timestamp = int(time.time())
     url = f"https://maps.googleapis.com/maps/api/timezone/json?location={lat},{lng}&timestamp={timestamp}&key={GOOGLE_API_KEY}"
-    
     try:
         res = requests.get(url).json()
         if res['status'] == 'OK':
@@ -192,7 +186,7 @@ def fetch_live_events(location_name, intended_time, group_type, target_date_str,
     try:
         response = requests.post(url, json=payload)
         data = response.json()
-        return f"TAVILY AI WEB SEARCH SUMMARY: {data.get('answer', '')}"
+        return f"LIVE WEB SEARCH SUMMARY: {data.get('answer', '')}"
     except: return "No live event data found."
 
 @retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3))
@@ -249,7 +243,15 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
         ],
         max_tokens=1000 
     )
-    return json.loads(response.choices[0].message.content)
+    
+    # 🐛 FIX: Robust Markdown Stripper to prevent JSON Decode errors
+    raw_content = response.choices[0].message.content.strip()
+    if raw_content.startswith("```json"):
+        raw_content = raw_content[7:-3].strip()
+    elif raw_content.startswith("```"):
+        raw_content = raw_content[3:-3].strip()
+        
+    return json.loads(raw_content)
 
 def render_spot_card(spot, location_input, user_id, index, mode):
     title_prefix = f"{index}." if mode == "top_3" else "🎲"
@@ -363,8 +365,8 @@ else:
             st.session_state.user = None
             st.session_state.current_results = None
             st.session_state.session_seen_spots = []
-            st.session_state.trigger_search = False
-            st.session_state.is_shuffle = False
+            st.session_state.search_active = False
+            st.session_state.trigger_fetch = False
             st.rerun()
             
     tab_explore, tab_profile, tab_saved = st.tabs(["🌍 Explore", "👤 My Profile", "⭐ Saved Spots"])
@@ -372,137 +374,159 @@ else:
     with tab_explore:
         user_profile = get_profile(st.session_state.user.id)
         
-        st.subheader("Where are we going?")
-        loc_col1, loc_col2 = st.columns([5, 1])
-        with loc_col1: location_input = st.text_input("Location", placeholder="Enter City or ZIP Code (e.g., Fairfax, VA)", label_visibility="collapsed")
-        with loc_col2: geo_data = streamlit_geolocation()
+        # --- SCREEN 1: THE INPUT FORM ---
+        if not st.session_state.search_active:
+            st.subheader("Where are we going?")
+            loc_col1, loc_col2 = st.columns([5, 1])
+            with loc_col1: st.session_state.loc_input = st.text_input("Location", value=st.session_state.get('loc_input', ''), placeholder="Enter City or ZIP Code (e.g., Fairfax, VA)", label_visibility="collapsed")
+            with loc_col2: geo_data = streamlit_geolocation()
 
-        gps_active = False
-        if geo_data and geo_data.get('latitude') is not None:
-            gps_active = True
-            st.success("🌿 GPS Locked!")
+            gps_active = False
+            if geo_data and geo_data.get('latitude') is not None:
+                gps_active = True
+                st.success("🌿 GPS Locked!")
 
-        st.write("---")
-        st.subheader("What's the plan?")
+            st.write("---")
+            st.subheader("What's the plan?")
 
-        col_day, col_time = st.columns(2)
-        with col_day: day_choice = st.radio("Day", ["☀️ Today", "📅 Tomorrow"], horizontal=True, label_visibility="collapsed")
-        with col_time: time_choice = st.radio("Time", ["☀️ Daytime", "🌙 Night"], horizontal=True, label_visibility="collapsed")
-        intended_time = f"{day_choice} ({time_choice})"
+            col_day, col_time = st.columns(2)
+            with col_day: st.session_state.day_choice = st.radio("Day", ["☀️ Today", "📅 Tomorrow"], horizontal=True, label_visibility="collapsed")
+            with col_time: st.session_state.time_choice = st.radio("Time", ["☀️ Daytime", "🌙 Night"], horizontal=True, label_visibility="collapsed")
+            intended_time = f"{st.session_state.day_choice} ({st.session_state.time_choice})"
 
-        st.write("") 
-        col_group, col_vibe = st.columns(2)
-        with col_group: group_type = st.selectbox("Who is going?", ["Date", "Family Outing", "Friends", "Solo"])
-        with col_vibe: vibe = st.radio("Setting?", ["Doesn't Matter", "Outside", "Inside"], horizontal=True)
-        
-        st.write("") 
-        col_food, col_dist = st.columns(2)
-        with col_food: food_pref = st.selectbox("Sustenance?", ["Full Meal", "Just Drinks/Coffee", "No Food Needed"])
-        with col_dist: distance = st.slider("Max Distance (Miles)", 1, 20, 5)
-
-        with st.expander("Need something specific? (Optional)", expanded=False):
-            specific_request = st.text_input("Keyword", placeholder="e.g., 'live jazz', 'vegan options'", label_visibility="collapsed")
-
-        filters_dict = {"group": group_type, "time": intended_time, "vibe": vibe, "food": food_pref, "specific": specific_request}
-
-        st.write("---")
-        
-        btn_col1, btn_col2 = st.columns(2)
-        with btn_col1: top_3_clicked = st.button("🌟 Top 3 Recommendations", use_container_width=True)
-        with btn_col2: get_wild_clicked = st.button("🎲 GET WILD", type="primary", use_container_width=True)
-
-        if top_3_clicked:
-            st.session_state.trigger_search = True
-            st.session_state.is_shuffle = False
-            st.session_state.current_mode = "top_3"
-        elif get_wild_clicked:
-            st.session_state.trigger_search = True
-            st.session_state.is_shuffle = False
-            st.session_state.current_mode = "get_wild"
-
-        if st.session_state.trigger_search:
-            st.session_state.trigger_search = False 
+            st.write("") 
+            col_group, col_vibe = st.columns(2)
+            with col_group: st.session_state.group_type = st.selectbox("Who is going?", ["Date", "Family Outing", "Friends", "Solo"])
+            with col_vibe: st.session_state.vibe = st.radio("Setting?", ["Doesn't Matter", "Outside", "Inside"], horizontal=True)
             
-            if not st.session_state.is_shuffle:
+            st.write("") 
+            col_food, col_dist = st.columns(2)
+            with col_food: st.session_state.food_pref = st.selectbox("Sustenance?", ["Full Meal", "Just Drinks/Coffee", "No Food Needed"])
+            with col_dist: st.session_state.dist = st.slider("Max Distance (Miles)", 1, 20, 5)
+
+            with st.expander("Need something specific? (Optional)", expanded=False):
+                st.session_state.specific = st.text_input("Keyword", placeholder="e.g., 'live jazz', 'vegan options'", label_visibility="collapsed")
+
+            st.write("---")
+            
+            btn_col1, btn_col2 = st.columns(2)
+            with btn_col1: top_3_clicked = st.button("🌟 Top 3 Recommendations", use_container_width=True)
+            with btn_col2: get_wild_clicked = st.button("🎲 GET WILD", type="primary", use_container_width=True)
+
+            if top_3_clicked or get_wild_clicked:
+                if not st.session_state.loc_input and not gps_active:
+                    st.warning("Please enter a location or click the GPS icon first!")
+                else:
+                    # Save state and trigger transition
+                    st.session_state.current_mode = "get_wild" if get_wild_clicked else "top_3"
+                    st.session_state.filters_dict = {
+                        "group": st.session_state.group_type, "time": intended_time, 
+                        "vibe": st.session_state.vibe, "food": st.session_state.food_pref, 
+                        "specific": st.session_state.specific
+                    }
+                    st.session_state.search_active = True
+                    st.session_state.trigger_fetch = True
+                    st.session_state.gps_active = gps_active
+                    st.session_state.geo_data = geo_data
+                    st.session_state.session_seen_spots = [] # Clear slate
+                    st.rerun()
+
+        # --- SCREEN 2: THE RESULTS & LOADER ---
+        else:
+            if st.button("← Start a Fresh Search"):
+                st.session_state.search_active = False
+                st.session_state.current_results = None
                 st.session_state.session_seen_spots = []
+                st.rerun()
                 
-            if not location_input and not gps_active:
-                st.warning("Please enter a location or click the GPS icon first!")
-            else:
+            if st.session_state.trigger_fetch:
+                st.session_state.trigger_fetch = False
+                
                 status_loader = st.empty()
-                status_loader.info("📍 Locking in coordinates and scanning local APIs...")
+                status_loader.info("📍 Locking in coordinates...")
                 
                 try:
-                    location_context = location_input
+                    location_context = st.session_state.loc_input
                     
-                    if gps_active:
-                        lat, lng = geo_data['latitude'], geo_data['longitude']
+                    if st.session_state.gps_active:
+                        lat, lng = st.session_state.geo_data['latitude'], st.session_state.geo_data['longitude']
                         location_context = "exact GPS coordinates"
                     else:
-                        lat, lng = get_coordinates(location_input)
+                        lat, lng = get_coordinates(st.session_state.loc_input)
                     
                     if lat is None: 
                         status_loader.error("Couldn't find that location.")
                     else:
-                        # Auto-detect local time to verify Today vs Tomorrow!
-                        target_date_str, relative_day = get_local_target_date(lat, lng, day_choice)
+                        target_date_str, relative_day = get_local_target_date(lat, lng, st.session_state.day_choice)
+                        semantic_query = build_semantic_query(st.session_state.filters_dict, user_profile)
                         
-                        semantic_query = build_semantic_query(filters_dict, user_profile)
-                        
+                        status_loader.info("☁️ Curating local weather, places, and events...")
                         weather_report, raw_places, live_events_data = asyncio.run(
-                            gather_all_data(lat, lng, semantic_query, distance, location_input, intended_time, group_type, target_date_str, relative_day)
+                            gather_all_data(lat, lng, semantic_query, st.session_state.dist, st.session_state.loc_input, st.session_state.filters_dict['time'], st.session_state.filters_dict['group'], target_date_str, relative_day)
                         )
                         
-                        status_loader.info("🧠 AI is curating your perfect itinerary...")
+                        if st.session_state.current_mode == "get_wild":
+                            status_loader.info("🎲 Loading up your adventure and revealing the spontaneity...")
+                        else:
+                            status_loader.info("🗺️ Assembling your perfect itinerary...")
                         
                         db_excluded = get_excluded_spots(st.session_state.user.id)
                         all_excluded = list(set(db_excluded + st.session_state.session_seen_spots))
                         
-                        st.session_state.current_results = get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_context, target_date_str, relative_day, user_profile, all_excluded, mode=st.session_state.current_mode)
+                        st.session_state.current_results = get_ai_recommendations(
+                            raw_places, live_events_data, weather_report, 
+                            st.session_state.filters_dict, location_context, 
+                            target_date_str, relative_day, user_profile, all_excluded, 
+                            mode=st.session_state.current_mode
+                        )
                         
                         for rec in st.session_state.current_results.get("recommendations", []):
                             st.session_state.session_seen_spots.append(rec['name'])
 
-                        status_loader.success("✅ Itinerary Ready!")
+                        if st.session_state.current_mode == "get_wild":
+                            status_loader.success("✅ Adventure Ready!")
+                        else:
+                            status_loader.success("✅ Itinerary Ready!")
                 except Exception as e: 
-                    status_loader.error(f"Error communicating with AI. ({e})")
+                    # Providing exact error info if json fails
+                    error_type = type(e).__name__
+                    status_loader.error(f"Error connecting to the wild. ({error_type}: {e})")
 
-        if st.session_state.current_results:
-            st.write("---")
-            results = st.session_state.current_results
-            mode = st.session_state.current_mode
-            
-            # --- PYDECK INTERACTIVE MAP WITH HOVER TOOLTIPS ---
-            map_data = []
-            for i, spot in enumerate(results.get("recommendations", [])):
-                if spot.get('lat') and spot.get('lng'):
-                    display_name = f"{i+1}. {spot['name']}" if mode == "top_3" else f"🎲 {spot['name']}"
-                    map_data.append({"lat": spot['lat'], "lon": spot['lng'], "name": display_name})
-            
-            if map_data:
-                with st.expander("🗺️ View on Map"):
-                    layer = pdk.Layer(
-                        'ScatterplotLayer',
-                        data=map_data,
-                        get_position='[lon, lat]',
-                        get_color='[255, 75, 75, 200]',
-                        get_radius=250,
-                        pickable=True,
-                    )
-                    view_state = pdk.ViewState(latitude=map_data[0]['lat'], longitude=map_data[0]['lon'], zoom=12)
-                    st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip={"html": "<b>{name}</b>"}))
-            
-            # --- RENDER CARDS ---
-            for index, spot in enumerate(results.get("recommendations", [])):
-                render_spot_card(spot, location_input, st.session_state.user.id, index + 1, mode)
+            if st.session_state.current_results:
                 st.write("---")
+                results = st.session_state.current_results
+                mode = st.session_state.current_mode
                 
-            # --- SHUFFLE BUTTON (ONLY IN TOP 3 MODE) ---
-            if mode == "top_3":
-                if st.button("🔀 Shuffle", use_container_width=True):
-                    st.session_state.trigger_search = True
-                    st.session_state.is_shuffle = True
-                    st.rerun()
+                # --- PYDECK INTERACTIVE MAP WITH HOVER TOOLTIPS ---
+                map_data = []
+                for i, spot in enumerate(results.get("recommendations", [])):
+                    if spot.get('lat') and spot.get('lng'):
+                        display_name = f"{i+1}. {spot['name']}" if mode == "top_3" else f"🎲 {spot['name']}"
+                        map_data.append({"lat": spot['lat'], "lon": spot['lng'], "name": display_name})
+                
+                if map_data:
+                    with st.expander("🗺️ View on Map"):
+                        layer = pdk.Layer(
+                            'ScatterplotLayer',
+                            data=map_data,
+                            get_position='[lon, lat]',
+                            get_color='[255, 75, 75, 200]',
+                            get_radius=250,
+                            pickable=True,
+                        )
+                        view_state = pdk.ViewState(latitude=map_data[0]['lat'], longitude=map_data[0]['lon'], zoom=12)
+                        st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip={"html": "<b>{name}</b>"}))
+                
+                # --- RENDER CARDS ---
+                for index, spot in enumerate(results.get("recommendations", [])):
+                    render_spot_card(spot, st.session_state.loc_input, st.session_state.user.id, index + 1, mode)
+                    
+                # --- SHUFFLE BUTTON (ONLY IN TOP 3 MODE) ---
+                if mode == "top_3":
+                    st.write("---")
+                    if st.button("🔀 Shuffle", use_container_width=True):
+                        st.session_state.trigger_fetch = True
+                        st.rerun()
 
     # ----------------------------------------
     # TAB 2 & 3: PROFILE & SAVED SPOTS 
@@ -512,7 +536,7 @@ else:
         st.markdown(f"### 🏆 Get Wild Tally: **{current_prof.get('wild_tally', 0)}**")
         st.write("Save spots to increase your tally and build your exploration streak!")
         st.write("---")
-        st.subheader("Personalize Your AI")
+        st.subheader("Personalize Your Profile")
         st.write("Set your baseline preferences so the app learns how you like to explore.")
         
         with st.form("profile_form"):
@@ -527,7 +551,7 @@ else:
                     'id': st.session_state.user.id, 'first_name': fname, 'partner_name': pname,
                     'needs_stroller_access': stroller, 'needs_dog_friendly': dog, 'vibe_preference': vibe_pref
                 }).execute()
-                st.success("Profile updated! The AI will now use these rules.")
+                st.success("Your preferences have been locked in.")
 
     with tab_saved:
         st.subheader("Your Adventure Ledger")
