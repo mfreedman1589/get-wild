@@ -80,7 +80,7 @@ if 'session_seen_spots' not in st.session_state: st.session_state.session_seen_s
 if 'search_active' not in st.session_state: st.session_state.search_active = False
 if 'trigger_fetch' not in st.session_state: st.session_state.trigger_fetch = False
 
-# FIX: Persistent memory state variables (Detached from Streamlit widget destruction)
+# Persistent memory state variables
 if 'mem_loc' not in st.session_state: st.session_state.mem_loc = ""
 if 'mem_day' not in st.session_state: st.session_state.mem_day = "☀️ Today"
 if 'mem_time' not in st.session_state: st.session_state.mem_time = "🌙 Night"
@@ -89,6 +89,8 @@ if 'mem_vibe' not in st.session_state: st.session_state.mem_vibe = "Doesn't Matt
 if 'mem_food' not in st.session_state: st.session_state.mem_food = "Full Meal"
 if 'mem_dist' not in st.session_state: st.session_state.mem_dist = 5
 if 'mem_spec' not in st.session_state: st.session_state.mem_spec = ""
+if 'mem_gps_active' not in st.session_state: st.session_state.mem_gps_active = False
+if 'mem_geo_data' not in st.session_state: st.session_state.mem_geo_data = None
 
 def get_profile(user_id):
     try:
@@ -104,8 +106,15 @@ def get_excluded_spots(user_id):
 
 def save_spot_to_db(user_id, name, address, category, rating=None, notes=""):
     try:
+        current_time = datetime.utcnow().isoformat()
         supabase.table('saved_spots').insert({
-            'user_id': user_id, 'spot_name': name, 'address': address, 'category': category, 'rating': rating, 'user_notes': notes
+            'user_id': user_id, 
+            'spot_name': name, 
+            'address': address, 
+            'category': category, 
+            'rating': rating, 
+            'user_notes': notes,
+            'saved_at': current_time
         }).execute()
         
         if rating != 1:
@@ -175,17 +184,19 @@ def build_semantic_query(filters_dict, profile):
         if profile.get('needs_dog_friendly') and filters_dict['vibe'] == "Outside": modifiers.append("dog-friendly")
         if profile.get('vibe_preference'): modifiers.append(profile.get('vibe_preference'))
 
-    if filters_dict.get('specific'): modifiers.append(filters_dict['specific'])
     modifier_str = " ".join(modifiers)
     
-    if filters_dict['vibe'] == "Outside":
-        if filters_dict['food'] == "Full Meal": base = "restaurants, patios, or wineries with outdoor dining"
-        elif filters_dict['food'] == "Just Drinks/Coffee": base = "breweries, wineries, or outdoor bars with patios"
-        else: base = "botanical gardens, outdoor attractions, mini golf, scenic trails, or parks"
+    if filters_dict.get('specific'):
+        base = filters_dict['specific']
     else:
-        if filters_dict['food'] == "Full Meal": base = "restaurants"
-        elif filters_dict['food'] == "Just Drinks/Coffee": base = "bars, cafes, or lounges"
-        else: base = "entertainment activities, museums, or indoor attractions"
+        if filters_dict['vibe'] == "Outside":
+            if filters_dict['food'] == "Full Meal": base = "restaurants, patios, or wineries with outdoor dining"
+            elif filters_dict['food'] == "Just Drinks/Coffee": base = "breweries, wineries, or outdoor bars with patios"
+            else: base = "botanical gardens, outdoor attractions, mini golf, scenic trails, or parks"
+        else:
+            if filters_dict['food'] == "Full Meal": base = "restaurants"
+            elif filters_dict['food'] == "Just Drinks/Coffee": base = "bars, cafes, or lounges"
+            else: base = "entertainment activities, museums, or indoor attractions"
             
     return f"{modifier_str} {base}".strip()
 
@@ -211,8 +222,7 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
 
 def fetch_live_events(location_name, intended_time, group_type, target_date_str, relative_day):
     url = "https://api.tavily.com/search"
-    # FIX: Bulletproof geography requirement for the web scraper
-    query = f"Find events, live music, or festivals happening EXACTLY {relative_day}, {target_date_str}, STRICTLY within a 15-mile radius of {location_name}. Discard any events outside this city/state. Provide venue name, time, and link."
+    query = f"Find specific events, live music, or festivals happening EXACTLY {relative_day}, {target_date_str}, strictly in {location_name}. Discard any events outside this immediate area. Provide venue name, exact street address, exact start time, and direct website link."
     payload = {"api_key": TAVILY_API_KEY, "query": query, "search_depth": "basic", "include_answer": True, "max_results": 3}
     try:
         response = requests.post(url, json=payload, timeout=15)
@@ -239,9 +249,18 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
     instruction = """Select EXACTLY ONE option from the data. Assign it the category: 'Spontaneous Adventure'.""" if mode == "get_wild" else """Return EXACTLY 3 options from the data, structured strictly as:
         1. The Crowd-Pleaser: Established, highly-rated, local favorite.
         2. The Fresh Take / Live Event: Prioritize the 'LIVE WEB SEARCH EVENTS' data.
-        3. The Hidden Gem: A spot that feels unique."""
+        3. The Hidden Gem: A spot that feels unique.
+        CRITICAL VARIETY RULE: You MUST provide variety. Do not return three of the exact same type of venue (e.g., if option 1 is a brewery, do not make option 3 a brewery)."""
 
-    # FIX: Extremely strict event formatting and geographic checks
+    if filters_dict.get('vibe') == "Outside":
+        weather_rule = "3. WEATHER PIVOT: If weather report indicates RAIN, SNOW, or TEMP < 45°F, prioritize indoor venues or those with heated patios."
+    else:
+        weather_rule = "3. WEATHER: Do not restrict recommendations or warn the user about weather, as the user is open to indoor venues or specifically requested them."
+
+    specific_rule = ""
+    if filters_dict.get('specific'):
+        specific_rule = f"5. MANDATORY SPECIFIC REQUIREMENT: The user specifically requested '{filters_dict['specific']}'. EVERY recommendation MUST align with this keyword. Do not suggest alternatives."
+
     system_prompt = f"""
     You are a luxury local concierge for an app called 'Get Wild'.
     
@@ -255,15 +274,16 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
     {blacklist_context}
     
     GEOGRAPHY, WEATHER & EVENT SHACKLES:
-    1. SUPER STRICT GEOGRAPHY: EVERY recommendation MUST be physically located in or within 20 miles of {location_name}. NEVER recommend a place in another country (like Canada) or distant state. If an event in the web search is out of town, completely ignore it and use Google Places instead.
-    2. STRICT EVENT DETAILS: If recommending a live event, you MUST verify it is happening {relative_day} ({target_date_str}). The 'why_its_perfect' field MUST start with the exact time and venue. (e.g., "[8:00 PM @ The Birchmere]: This concert is...").
-    3. WEATHER PIVOT: If weather report indicates RAIN, SNOW, or TEMP < 45°F, prioritize indoor venues or those with heated patios.
-    4. DO NOT INVENT PLACES. Must be in the provided data. Try to pull the website URL for events from the web search.
+    1. SUPER STRICT GEOGRAPHY: EVERY recommendation MUST be physically located in or within 20 miles of {location_name}. Discard any web events outside this immediate area. 
+    2. STRICT EVENT DETAILS: If recommending a live event, verify it is happening {relative_day} ({target_date_str}). The 'why_its_perfect' field MUST start with the exact time and venue. 
+    {weather_rule}
+    4. ANTI-HALLUCINATION (CRITICAL): DO NOT guess addresses. You MUST use the EXACT 'formattedAddress' and 'websiteUri' provided in the Google Places JSON or the Web Search data. 
+    {specific_rule}
     
     {instruction}
     
     Return STRICTLY as a JSON object with a 'recommendations' array containing:
-    'name', 'category', 'address', 'why_its_perfect' (2-3 sentences), 'vibe_check' (3 words), 'website' (URL if available, otherwise empty string), 'photo_ref' (The string from places.photos[0].name if available, otherwise empty), 'lat' (float), and 'lng' (float).
+    'name', 'category', 'address' (Exact from data), 'why_its_perfect' (2-3 sentences), 'vibe_check' (3 words), 'website' (URL if available, otherwise empty string), 'photo_ref' (The string from places.photos[0].name if available, otherwise empty), 'lat' (float), and 'lng' (float).
     """
 
     response = client.chat.completions.create(
@@ -336,10 +356,10 @@ def render_spot_card(spot, location_input, user_id, index, mode):
     
     col1, col2, col3 = st.columns([1, 1, 2])
     with col1:
-        if st.button("🔖 Save to List", key=f"save_{spot['name']}"):
+        if st.button("🔖 Save to List", key=f"save_{index}_{spot['name']}"):
             save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'))
     with col2:
-        if st.button("🚫 Not for me", key=f"hate_{spot['name']}"):
+        if st.button("🚫 Not for me", key=f"hate_{index}_{spot['name']}"):
             save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'), rating=1, notes="Blacklisted via quick-button.")
 
 # ==========================================
@@ -389,7 +409,6 @@ if st.session_state.user is None:
                 except Exception as e: st.error(f"Signup failed: {e}")
 
 else:
-    # Notice: The top Logout button is completely gone! It moved to Profile.
     tab_explore, tab_profile, tab_saved = st.tabs(["🌍 Explore", "👤 My Profile", "⭐ Saved Spots"])
 
     with tab_explore:
@@ -400,15 +419,17 @@ else:
             st.subheader("Where are we going?")
             loc_col1, loc_col2 = st.columns([5, 1])
             
-            # Using our secure memory variables so the UI remembers your choices
             with loc_col1: 
                 ui_loc = st.text_input("Location", value=st.session_state.mem_loc, placeholder="Enter City or ZIP Code", label_visibility="collapsed")
             with loc_col2: 
                 geo_data = streamlit_geolocation()
 
-            gps_active = False
             if geo_data and geo_data.get('latitude') is not None:
-                gps_active = True
+                st.session_state.mem_gps_active = True
+                st.session_state.mem_geo_data = geo_data
+                st.session_state.mem_loc = "" 
+
+            if st.session_state.mem_gps_active:
                 st.success("🌿 GPS Locked!")
 
             st.write("---")
@@ -455,10 +476,9 @@ else:
             with btn_col2: get_wild_clicked = st.button("🎲 GET WILD", type="primary", use_container_width=True)
 
             if top_3_clicked or get_wild_clicked:
-                if not ui_loc and not gps_active:
+                if not ui_loc and not st.session_state.mem_gps_active:
                     st.warning("Please enter a location or click the GPS icon first!")
                 else:
-                    # Save current UI state into secure memory
                     st.session_state.mem_loc = ui_loc
                     st.session_state.mem_day = ui_day
                     st.session_state.mem_time = ui_time
@@ -476,8 +496,6 @@ else:
                     }
                     st.session_state.search_active = True
                     st.session_state.trigger_fetch = True
-                    st.session_state.gps_active = gps_active
-                    st.session_state.geo_data = geo_data
                     st.session_state.session_seen_spots = [] 
                     st.rerun()
 
@@ -500,8 +518,8 @@ else:
                 try:
                     location_context = st.session_state.mem_loc
                     
-                    if st.session_state.gps_active:
-                        lat, lng = st.session_state.geo_data['latitude'], st.session_state.geo_data['longitude']
+                    if st.session_state.mem_gps_active and st.session_state.mem_geo_data:
+                        lat, lng = st.session_state.mem_geo_data['latitude'], st.session_state.mem_geo_data['longitude']
                         location_context = "exact GPS coordinates"
                     else:
                         lat, lng = get_coordinates(st.session_state.mem_loc)
@@ -514,7 +532,7 @@ else:
                         
                         status_loader.info("☁️ Curating local weather, places, and events...")
                         weather_report, raw_places, live_events_data = asyncio.run(
-                            gather_all_data(lat, lng, semantic_query, st.session_state.mem_dist, st.session_state.mem_loc, st.session_state.filters_dict['time'], st.session_state.filters_dict['group'], target_date_str, relative_day)
+                            gather_all_data(lat, lng, semantic_query, st.session_state.mem_dist, location_context, st.session_state.filters_dict['time'], st.session_state.filters_dict['group'], target_date_str, relative_day)
                         )
                         
                         if st.session_state.current_mode == "get_wild":
@@ -604,7 +622,6 @@ else:
                 }).execute()
                 st.success("Your preferences have been locked in.")
                 
-        # NEW: Log Out button moved safely to the bottom of the profile tab
         st.write("---")
         if st.button("🚪 Log Out", type="secondary"):
             supabase.auth.sign_out()
