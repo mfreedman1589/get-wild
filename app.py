@@ -9,6 +9,7 @@ import pydeck as pdk
 import time
 from openai import OpenAI
 from datetime import datetime, timedelta
+from dateutil import parser as dateutil_parser
 from streamlit_geolocation import streamlit_geolocation
 from supabase import create_client, Client
 from tenacity import retry, wait_exponential, stop_after_attempt
@@ -173,6 +174,18 @@ def get_local_target_date(lat, lng, day_choice):
     else:
         return local_time.strftime("%A, %B %d, %Y"), "TODAY"
 
+def get_state_from_coords(lat, lng):
+    url = f"https://maps.googleapis.com/maps/api/geocode/json?latlng={lat},{lng}&key={GOOGLE_API_KEY}"
+    try:
+        res = requests.get(url, timeout=10).json()
+        if res['status'] == 'OK':
+            for component in res['results'][0]['address_components']:
+                if 'administrative_area_level_1' in component['types']:
+                    return component['short_name'], component['long_name']
+    except:
+        pass
+    return None, None
+
 def get_live_weather(lat, lng):
     try:
         url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lng}&units=imperial&appid={OPENWEATHER_API_KEY}"
@@ -231,22 +244,117 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
     except: pass
     return []
 
-def fetch_live_events(location_name, intended_time, group_type, target_date_str, relative_day):
-    url = "https://api.tavily.com/search"
-    query = f"Find events, live music, theater, or festivals happening EXACTLY {relative_day}, {target_date_str}. Location MUST be strictly in or bordering {location_name}. Discard anything in other states. Provide venue name, exact street address, start time, and direct website link."
-    payload = {"api_key": TAVILY_API_KEY, "query": query, "search_depth": "advanced", "include_answer": True, "max_results": 3}
+def fetch_live_events(location_name, intended_time, group_type, target_date_str, relative_day, lat, lng):
+    import re
+
+    US_STATES = {
+        "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado",
+        "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho",
+        "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana",
+        "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota",
+        "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada",
+        "New Hampshire", "New Jersey", "New Mexico", "New York",
+        "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon",
+        "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota",
+        "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington",
+        "West Virginia", "Wisconsin", "Wyoming"
+    }
+
     try:
-        response = requests.post(url, json=payload, timeout=15)
-        data = response.json()
-        return f"LIVE WEB SEARCH SUMMARY: {data.get('answer', '')}"
-    except: return "No live event data found."
+        state_abbr, state_name = get_state_from_coords(lat, lng)
+        search_location = state_name if state_name else location_name
+
+        try:
+            target_date = dateutil_parser.parse(target_date_str).date()
+        except:
+            target_date = None
+
+        url = "https://api.tavily.com/search"
+        queries = [
+            f"live music concerts events {target_date_str} {search_location}",
+            f"festivals theater shows activities {target_date_str} {search_location}"
+        ]
+
+        validated_results = []
+
+        for query in queries:
+            payload = {
+                "api_key": TAVILY_API_KEY,
+                "query": query,
+                "search_depth": "advanced",
+                "include_answer": False,
+                "max_results": 5
+            }
+            try:
+                response = requests.post(url, json=payload, timeout=15)
+                data = response.json()
+                results = data.get('results', [])
+
+                for r in results:
+                    snippet = r.get('content', '') or ''
+                    title = r.get('title', '')
+                    result_url = r.get('url', '')
+
+                    # Reject results that mention another US state without mentioning our target state
+                    if state_name:
+                        foreign_state_only = False
+                        for state in US_STATES:
+                            if state != state_name and state.lower() in snippet.lower():
+                                if (state_name.lower() not in snippet.lower() and
+                                        (not state_abbr or state_abbr not in snippet)):
+                                    foreign_state_only = True
+                                    break
+                        if foreign_state_only:
+                            continue
+
+                    # Validate date against target
+                    date_verified = False
+                    if target_date:
+                        date_patterns = re.findall(
+                            r'\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|'
+                            r'Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)'
+                            r'\s+\d{1,2}(?:,?\s*\d{4})?\b',
+                            snippet, re.IGNORECASE
+                        )
+                        for dp in date_patterns:
+                            try:
+                                parsed = dateutil_parser.parse(
+                                    dp, default=datetime(target_date.year, 1, 1)
+                                ).date()
+                                if parsed == target_date:
+                                    date_verified = True
+                                    break
+                            except:
+                                pass
+
+                    validated_results.append({
+                        "title": title,
+                        "venue_name": "",
+                        "venue_address": "",
+                        "date_str": target_date_str,
+                        "start_time": "",
+                        "date_verified": date_verified,
+                        "url": result_url,
+                        "snippet": snippet[:500]
+                    })
+            except:
+                continue
+
+        return validated_results
+    except:
+        return []
 
 @retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3))
 def get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_name, target_date_str, relative_day, profile, excluded_spots, favorite_spots, mode="top_3"):
     client = OpenAI(api_key=OPENAI_API_KEY)
     
     trimmed_places = raw_places[:8] if isinstance(raw_places, list) and len(raw_places) > 8 else raw_places
-    safe_events_data = live_events_data[:4000] if isinstance(live_events_data, str) else live_events_data
+    if isinstance(live_events_data, list):
+        safe_events_data = live_events_data[:6]
+    elif isinstance(live_events_data, str):
+        safe_events_data = live_events_data[:4000]
+    else:
+        safe_events_data = live_events_data
 
     profile_context = ""
     if profile:
@@ -291,11 +399,16 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
     {blacklist_context}
     
     GEOGRAPHY, WEATHER & EVENT SHACKLES:
-    1. SUPER STRICT GEOGRAPHY: EVERY recommendation MUST be physically located in or within 20 miles of {location_name}. Discard any web events outside this immediate area. 
-    2. STRICT EVENT DETAILS: If recommending a live event, verify it is happening {relative_day} ({target_date_str}). The 'why_its_perfect' field MUST start with the exact time and venue. 
+    1. SUPER STRICT GEOGRAPHY: EVERY recommendation MUST be physically located in or within 20 miles of {location_name}. Discard any web events outside this immediate area.
+    2. STRICT EVENT DETAILS: If recommending a live event, verify it is happening {relative_day} ({target_date_str}). The 'why_its_perfect' field MUST start with the exact time and venue.
     {weather_rule}
-    4. ANTI-HALLUCINATION (CRITICAL): DO NOT guess addresses. You MUST use the EXACT 'formattedAddress' and 'websiteUri' provided in the Google Places JSON or the Web Search data. 
+    4. ANTI-HALLUCINATION (CRITICAL): DO NOT guess addresses. You MUST use the EXACT 'formattedAddress' and 'websiteUri' provided in the Google Places JSON or the Web Search data.
     {specific_rule}
+
+    STRICT EVENT EVALUATION RULES:
+    5. DATE GATING: ONLY use events where date_verified=True. Completely discard any event with date_verified=False — do not mention or recommend them.
+    6. EVENT VENUE MANDATE: When recommending any live event, the 'why_its_perfect' field MUST include the venue name AND full venue address extracted from the event data or snippet.
+    7. NO-EVENTS FALLBACK: If zero events have date_verified=True, do NOT fabricate event details. Fall back exclusively to Google Places data for all recommendations.
     
     {instruction}
     
@@ -308,7 +421,7 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
         response_format={ "type": "json_object" },
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"GOOGLE PLACES DATA: {json.dumps(trimmed_places)}\n\nLIVE WEB SEARCH EVENTS:\n{safe_events_data}"}
+            {"role": "user", "content": f"GOOGLE PLACES DATA: {json.dumps(trimmed_places)}\n\nLIVE WEB SEARCH EVENTS:\n{json.dumps(safe_events_data) if isinstance(safe_events_data, list) else safe_events_data}"}
         ],
         max_tokens=2500 
     )
@@ -392,7 +505,7 @@ def render_spot_card(spot, location_input, user_id, index, mode):
 async def gather_all_data(lat, lng, semantic_query, distance, location_input, intended_time, group_type, target_date_str, relative_day):
     weather_task = asyncio.to_thread(get_live_weather, lat, lng)
     places_task = asyncio.to_thread(fetch_places_semantic, semantic_query, lat, lng, distance)
-    events_task = asyncio.to_thread(fetch_live_events, location_input if location_input else "nearby", intended_time, group_type, target_date_str, relative_day)
+    events_task = asyncio.to_thread(fetch_live_events, location_input if location_input else "nearby", intended_time, group_type, target_date_str, relative_day, lat, lng)
     return await asyncio.gather(weather_task, places_task, events_task)
 
 # ==========================================
