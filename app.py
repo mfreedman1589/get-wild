@@ -1,3 +1,4 @@
+import hashlib
 import streamlit as st
 import streamlit.components.v1 as components
 import requests
@@ -136,6 +137,10 @@ def save_spot_to_db(user_id, name, address, category, rating=None, notes=""):
             st.toast("🚫 Blacklisted. We won't recommend this again.")
     except Exception as e: st.error("Database error.")
 
+def generate_cache_key(filters_dict, location_name, target_date_str, mode):
+    raw = json.dumps(filters_dict, sort_keys=True) + location_name + target_date_str + mode
+    return hashlib.md5(raw.encode()).hexdigest()
+
 def delete_spot_from_db(spot_id):
     try:
         supabase.table('saved_spots').delete().eq('id', spot_id).execute()
@@ -234,7 +239,7 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
     radius_meters = int(radius_miles * 1609.34)
     data = {
         "textQuery": semantic_query,
-        "pageSize": 20,
+        "pageSize": 8,
         "locationBias": {"circle": {"center": {"latitude": lat, "longitude": lng}, "radius": radius_meters}}
     }
     try:
@@ -417,7 +422,7 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
     """
 
     response = client.chat.completions.create(
-        model="gpt-4o",
+        model="gpt-4o-mini",
         response_format={ "type": "json_object" },
         messages=[
             {"role": "system", "content": system_prompt},
@@ -683,12 +688,36 @@ else:
                         # NEW: Fetch favorites to feed the AI
                         user_favorites = get_favorite_spots(st.session_state.user.id)
                         
-                        st.session_state.current_results = get_ai_recommendations(
-                            raw_places, live_events_data, weather_report, 
-                            st.session_state.filters_dict, location_context, 
-                            target_date_str, relative_day, user_profile, all_excluded, 
-                            user_favorites, mode=st.session_state.current_mode
+                        cache_key = generate_cache_key(
+                            st.session_state.filters_dict, location_context,
+                            target_date_str, st.session_state.current_mode
                         )
+                        cached_result = None
+                        try:
+                            cutoff = (datetime.utcnow() - timedelta(hours=2)).isoformat()
+                            rows = supabase.table('recommendation_cache').select('result_json').eq('cache_key', cache_key).gte('created_at', cutoff).limit(1).execute()
+                            if rows.data:
+                                cached_result = json.loads(rows.data[0]['result_json'])
+                        except:
+                            pass
+
+                        if cached_result:
+                            st.session_state.current_results = cached_result
+                        else:
+                            st.session_state.current_results = get_ai_recommendations(
+                                raw_places, live_events_data, weather_report,
+                                st.session_state.filters_dict, location_context,
+                                target_date_str, relative_day, user_profile, all_excluded,
+                                user_favorites, mode=st.session_state.current_mode
+                            )
+                            try:
+                                supabase.table('recommendation_cache').insert({
+                                    'cache_key': cache_key,
+                                    'result_json': json.dumps(st.session_state.current_results),
+                                    'created_at': datetime.utcnow().isoformat()
+                                }).execute()
+                            except:
+                                pass
                         
                         for rec in st.session_state.current_results.get("recommendations", []):
                             st.session_state.session_seen_spots.append(rec['name'])
