@@ -298,7 +298,17 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
     try:
         response = requests.post(url, headers=headers, json=data, timeout=15)
         if response.status_code == 200:
-            return response.json().get('places', [])
+            places = response.json().get('places', [])
+            for place in places:
+                photos = place.get('photos', [])
+                if photos:
+                    photo_name = photos[0].get('name', '')
+                    place['photo_ref'] = photo_name
+                    place['photo_url'] = f"https://places.googleapis.com/v1/{photo_name}/media?key={GOOGLE_API_KEY}&maxHeightPx=400&maxWidthPx=800"
+                else:
+                    place['photo_ref'] = None
+                    place['photo_url'] = None
+            return places
     except: pass
     return []
 
@@ -470,7 +480,7 @@ RULES:
 
 {instruction}
 
-Return JSON with a 'recommendations' array. Each item: name, tier_name, category, address (exact), why_its_perfect (2-3 sentences), vibe_check (3 words), matched_tags (2-3 strings; mandatory if specific given), website, photo_ref, lat, lng."""
+Return JSON with a 'recommendations' array. Each item: name, tier_name, category, address (exact), why_its_perfect (2-3 sentences), vibe_check (3 words), matched_tags (2-3 strings; mandatory if specific given), website, lat, lng."""
 
     try:
         response = client.chat.completions.create(
@@ -496,6 +506,27 @@ Return JSON with a 'recommendations' array. Each item: name, tier_name, category
         
     return json.loads(raw_content)
 
+def match_photos_to_results(recommendations, raw_places):
+    place_photos = {}
+    for place in (raw_places or []):
+        name = place.get('displayName', {}).get('text', '').lower().replace(' ', '')
+        if name and place.get('photo_url'):
+            place_photos[name] = place['photo_url']
+    for rec in recommendations:
+        rec_name = rec.get('name', '').lower().replace(' ', '')
+        if rec_name in place_photos:
+            rec['photo_url'] = place_photos[rec_name]
+            continue
+        matched = False
+        for place_name, url in place_photos.items():
+            if place_name in rec_name or rec_name in place_name:
+                rec['photo_url'] = url
+                matched = True
+                break
+        if not matched:
+            rec['photo_url'] = None
+    return recommendations
+
 def render_spot_card(spot, location_input, user_id, index, mode):
     title_prefix = f"{index}." if mode == "top_3" else "🎲"
     special_class = "get-wild-special" if mode == "get_wild" else ""
@@ -511,20 +542,20 @@ def render_spot_card(spot, location_input, user_id, index, mode):
     email_url = f"mailto:?subject={urllib.parse.quote('Wild Plan: ' + spot['name'])}&body={encoded_share}"
     
     text_to_check = f"{spot['name']} {spot.get('category', '')} {spot.get('why_its_perfect', '')}".lower()
-    if "comedy" in text_to_check or "stand-up" in text_to_check or "laugh" in text_to_check:
-        fallback_url = "https://images.unsplash.com/photo-1585699324551-f6c309eedeca?w=800&q=80"
-    elif "outdoor" in text_to_check or "amphitheater" in text_to_check or "festival" in text_to_check:
-        fallback_url = "https://images.unsplash.com/photo-1459749411175-04bf5292ceea?w=800&q=80"
-    elif "music" in text_to_check or "concert" in text_to_check or "jazz" in text_to_check or "band" in text_to_check:
-        fallback_url = "https://images.unsplash.com/photo-1540039155732-d68a96670afb?w=800&q=80"
+    if "music" in text_to_check or "concert" in text_to_check or "jazz" in text_to_check or "band" in text_to_check:
+        fallback_url = "https://source.unsplash.com/800x400/?live-music"
+    elif "outdoor" in text_to_check or "park" in text_to_check or "garden" in text_to_check or "hike" in text_to_check:
+        fallback_url = "https://source.unsplash.com/800x400/?park-outdoor"
+    elif "food" in text_to_check or "restaurant" in text_to_check or "dining" in text_to_check or "eat" in text_to_check:
+        fallback_url = "https://source.unsplash.com/800x400/?restaurant"
+    elif "bar" in text_to_check or "brewery" in text_to_check or "cocktail" in text_to_check or "brew" in text_to_check:
+        fallback_url = "https://source.unsplash.com/800x400/?cocktail-bar"
+    elif "museum" in text_to_check or "art" in text_to_check or "gallery" in text_to_check:
+        fallback_url = "https://source.unsplash.com/800x400/?museum"
     else:
-        fallback_url = "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80"
+        fallback_url = "https://source.unsplash.com/800x400/?city-nightlife"
 
-    st.write(f"DEBUG photo_ref: {spot.get('photo_ref')}")
-    if spot.get('photo_ref'):
-        img_url = f"https://places.googleapis.com/v1/{spot['photo_ref']}/media?key={GOOGLE_API_KEY}&maxHeightPx=400&maxWidthPx=800"
-    else:
-        img_url = fallback_url
+    img_url = spot.get('photo_url') or fallback_url
     img_html = f'<img src="{img_url}" class="wild-card-img" alt="">'
     website_icon = f'<a href="{spot["website"]}" target="_blank" class="icon-btn" title="Visit Website">🌐</a>' if spot.get('website') else ""
 
@@ -786,13 +817,15 @@ else:
                             st.session_state.current_results = cached_result
                         else:
                             selected_tiers = random.sample(TIER_PERSONALITIES, 3) if st.session_state.current_mode != "get_wild" else None
-                            st.session_state.current_results = get_ai_recommendations(
+                            ai_results = get_ai_recommendations(
                                 raw_places, live_events_data, weather_report,
                                 st.session_state.filters_dict, location_context,
                                 target_date_str, relative_day, user_profile, all_excluded,
                                 user_favorites, mode=st.session_state.current_mode,
                                 tier_personalities=selected_tiers
                             )
+                            match_photos_to_results(ai_results.get('recommendations', []), raw_places)
+                            st.session_state.current_results = ai_results
                             try:
                                 supabase.table('recommendation_cache').insert({
                                     'cache_key': cache_key,
