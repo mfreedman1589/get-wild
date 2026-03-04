@@ -803,8 +803,10 @@ with _fb_col:
     with st.popover("💬", help="Send feedback"):
         st.markdown("**What's on your mind?**")
         st.caption("Bug, idea, or general feedback — we read everything.")
-        _fb_comment = st.text_area("", placeholder="Type here...", label_visibility="collapsed", key="fb_textarea")
+        st.text_area("", placeholder="Type here...", label_visibility="collapsed", key="fb_textarea")
         if st.button("Send Feedback", type="primary", use_container_width=True, key="fb_submit"):
+            _fb_comment = st.session_state.get("fb_textarea", "")
+            st.write(f"DEBUG comment value: '{_fb_comment}'")
             if submit_feedback(_fb_user_id, _fb_comment):
                 st.toast("✅ Feedback sent! Thank you.")
             else:
