@@ -59,7 +59,7 @@ custom_css = """
     .hero-subtitle { color: #558b2f; font-size: 1.2rem; font-weight: 400; letter-spacing: 1px; margin-top: 10px; }
 
     /* CARD */
-    .wc-card { background: #ffffff; border-radius: 12px; overflow: hidden; margin: 16px 0 4px 0; box-shadow: 0 2px 12px rgba(0,0,0,0.08); border: 1px solid #e8e8e8; animation: fadeSlideUp 0.5s ease-out forwards; }
+    .wc-card { background: #ffffff; border-radius: 12px 12px 0 0; overflow: hidden; margin: 16px 0 0 0; box-shadow: 0 2px 12px rgba(0,0,0,0.08); border: 1px solid #e8e8e8; border-bottom: none; animation: fadeSlideUp 0.5s ease-out forwards; }
     .wc-special { border: 2px solid #FFD700 !important; box-shadow: 0 0 20px rgba(255,215,0,0.35) !important; }
 
     .wc-img-wrap { position: relative; width: 100%; height: 200px; overflow: hidden; }
@@ -75,9 +75,11 @@ custom_css = """
     .wc-tags { margin: 0 0 2px 0; }
     .wc-tag { display: inline-block; background: #e8f5e9; color: #2e7d32; padding: 3px 10px; border-radius: 12px; font-size: 0.73rem; font-weight: 600; margin: 2px 4px 2px 0; border: 1px solid #c8e6c9; }
 
-    .wc-links { display: flex; gap: 8px; flex-wrap: wrap; }
-    .wc-link-btn { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 8px; border: 1px solid #e0e0e0; font-size: 1.1rem; text-decoration: none; background: #fafafa; transition: background 0.15s, transform 0.15s; cursor: pointer; }
-    .wc-link-btn:hover { background: #f0f0f0; transform: scale(1.08); }
+    .wc-utility { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; margin-bottom: 12px; }
+    .wc-util-link { color: #aaa; font-size: 0.78rem; text-decoration: none; font-weight: 500; transition: color 0.15s; }
+    .wc-util-link:hover { color: #555; text-decoration: underline; }
+    .wc-util-sep { color: #ddd; padding: 0 4px; font-size: 0.78rem; }
+    div.stMarkdown:has(.wc-card) + div[data-testid="stHorizontalBlock"] { border: 1px solid #e8e8e8; border-top: 1px solid #f0f0f0; border-radius: 0 0 12px 12px; background: #ffffff; padding: 4px 16px 12px; margin-bottom: 20px; }
 
     /* Dark mode */
     @media (prefers-color-scheme: dark) {
@@ -89,8 +91,9 @@ custom_css = """
         .wc-meta, .wc-address { color: #999 !important; }
         .wc-pitch { color: #ccc !important; }
         .wc-hr { border-color: #333 !important; }
-        .wc-link-btn { background: #2a2a2a !important; border-color: #444 !important; }
-        .wc-link-btn:hover { background: #333 !important; }
+        .wc-util-link { color: #666 !important; }
+        .wc-util-link:hover { color: #999 !important; }
+        div.stMarkdown:has(.wc-card) + div[data-testid="stHorizontalBlock"] { background: #1e1e1e !important; border-color: #333 !important; border-top-color: #2a2a2a !important; }
         .wc-tag { background: #1a3320 !important; border-color: #2a5230 !important; }
     }
 
@@ -590,12 +593,35 @@ def render_spot_card(spot, location_input, user_id, index, mode):
         for tag in matched_tags:
             tags_html += f'<span class="wc-tag">✓ {tag}</span>'
 
-    website_btn = f'<a href="{spot["website"]}" target="_blank" class="wc-link-btn" title="Visit Website">🌐</a>' if spot.get('website') else ""
     tier_name = spot.get('tier_name', 'Top Pick')
     category  = spot.get('category', '')
     vibe      = spot.get('vibe_check', '')
     address   = spot.get('address', '')
     pitch     = spot.get('why_its_perfect', '')
+
+    # Utility row links
+    name_js  = spot['name'].replace("'", "\\'")
+    addr_js  = address.replace("'", "\\'")
+    share_subject = urllib.parse.quote(f"Wild Plan: {spot['name']}")
+    share_body    = urllib.parse.quote(f"Let's go to {spot['name']}!\n{address}\n{map_url}")
+    share_href    = f"mailto:?subject={share_subject}&body={share_body}"
+    share_onclick = (
+        f"if(navigator.share){{"
+        f"event.preventDefault();"
+        f"navigator.share({{title:'{name_js}',text:'Let\\'s go to {name_js}! {addr_js}',url:'{map_url}'}})"
+        f"}}"
+    )
+    website_part = f'<a href="{spot["website"]}" target="_blank" class="wc-util-link">🌐 Website</a><span class="wc-util-sep">|</span>' if spot.get('website') else ''
+    utility_html = (
+        f'<div class="wc-utility">'
+        f'{website_part}'
+        f'<a href="{map_url}" target="_blank" class="wc-util-link">🗺️ Directions</a>'
+        f'<span class="wc-util-sep">|</span>'
+        f'<a href="{uber_url}" target="_blank" class="wc-util-link">🚗 Uber</a>'
+        f'<span class="wc-util-sep">|</span>'
+        f'<a href="{share_href}" class="wc-util-link" onclick="{share_onclick}">↗ Share</a>'
+        f'</div>'
+    )
 
     html_card = f"""<div class="wc-card {special_class}">
   <div class="wc-img-wrap">
@@ -606,15 +632,10 @@ def render_spot_card(spot, location_input, user_id, index, mode):
     <div class="wc-name">{title_prefix} {spot['name']}</div>
     <div class="wc-meta">{category} • ✨ {vibe}</div>
     <div class="wc-address">📍 {address}</div>
+    {utility_html}
     <hr class="wc-hr">
     <p class="wc-pitch">{pitch}</p>
     <div class="wc-tags">{tags_html}</div>
-    <hr class="wc-hr">
-    <div class="wc-links">
-      <a href="{map_url}" target="_blank" class="wc-link-btn" title="View on Maps">🗺️</a>
-      {website_btn}
-      <a href="{uber_url}" target="_blank" class="wc-link-btn" title="Uber">🚗</a>
-    </div>
   </div>
 </div>
 """
