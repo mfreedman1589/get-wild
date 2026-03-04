@@ -144,13 +144,9 @@ def generate_cache_key(filters_dict, location_name, target_date_str, mode):
 
 def delete_spot_from_db(spot_id):
     try:
-        response = supabase.table('saved_spots').delete().eq('id', spot_id).select().execute()
-        if response.data:
-            st.toast("🗑️ Spot permanently deleted.")
-            return True
-        else:
-            st.error("Delete failed: no matching record found.")
-            return False
+        supabase.table('saved_spots').delete().eq('id', spot_id).execute()
+        st.toast("🗑️ Spot permanently deleted.")
+        return True
     except Exception as e:
         st.error(f"Database error while deleting: {e}")
         return False
