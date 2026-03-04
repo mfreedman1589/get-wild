@@ -176,6 +176,61 @@ def get_favorite_spots(user_id):
         return [f"{spot['spot_name']} ({spot['category']})" for spot in res.data] if res.data else []
     except: return []
 
+def get_user_preference_scores(user_id):
+    """Returns learned taste profile from saved/rated spots."""
+    _TASTE_KEYWORDS = [
+        "wine", "brewery", "bar", "coffee", "museum", "outdoor", "music",
+        "comedy", "sports", "restaurant", "jazz", "cocktail", "theater", "brunch",
+    ]
+    try:
+        res = supabase.table('saved_spots').select('spot_name, category, rating').eq('user_id', user_id).execute()
+        spots = res.data or []
+        if not spots:
+            return {}
+
+        # Category scoring: count * avg_rating for rated>=4 spots
+        from collections import defaultdict
+        cat_ratings = defaultdict(list)
+        kw_counts = defaultdict(int)
+        avoid_kw_counts = defaultdict(int)
+
+        for spot in spots:
+            rating = spot.get('rating') or 0
+            cat = (spot.get('category') or '').strip()
+            name = (spot.get('spot_name') or '').lower()
+            cat_lower = cat.lower()
+            combined = name + ' ' + cat_lower
+
+            if rating >= 4:
+                if cat:
+                    cat_ratings[cat].append(rating)
+                for kw in _TASTE_KEYWORDS:
+                    if kw in combined:
+                        kw_counts[kw] += 1
+            elif rating == 1:
+                for kw in _TASTE_KEYWORDS:
+                    if kw in combined:
+                        avoid_kw_counts[kw] += 1
+
+        # Score = count * avg_rating per category
+        cat_scores = {
+            cat: len(ratings) * (sum(ratings) / len(ratings))
+            for cat, ratings in cat_ratings.items()
+        }
+        top_categories = sorted(cat_scores, key=cat_scores.get, reverse=True)[:3]
+        top_keywords = sorted(kw_counts, key=kw_counts.get, reverse=True)[:5]
+        top_keywords = [kw for kw in top_keywords if kw_counts[kw] >= 2]  # min 2 mentions
+        avoid_keywords = [kw for kw in avoid_kw_counts if avoid_kw_counts[kw] >= 2]
+
+        return {
+            "top_categories": top_categories,
+            "top_keywords": top_keywords,
+            "avoid_keywords": avoid_keywords,
+            "rated_count": len([s for s in spots if (s.get('rating') or 0) >= 4]),
+        }
+    except:
+        return {}
+
 def save_spot_to_db(user_id, name, address, category, rating=None, notes=""):
     try:
         current_time = datetime.utcnow().isoformat()
@@ -378,7 +433,7 @@ def get_live_weather(lat, lng):
     except: pass
     return "Weather data unavailable."
 
-def build_semantic_query(filters_dict, profile):
+def build_semantic_query(filters_dict, profile, preference_scores=None):
     specific = (filters_dict.get('specific') or "").strip()
 
     # If specific keyword provided, it drives the query — base vibe/food is a secondary context hint
@@ -392,6 +447,13 @@ def build_semantic_query(filters_dict, profile):
         return " ".join(p for p in parts if p).strip()
 
     modifiers = []
+    # Boost top 2 learned taste keywords (skip any in avoid list)
+    if preference_scores:
+        avoid = set(preference_scores.get('avoid_keywords') or [])
+        for kw in (preference_scores.get('top_keywords') or [])[:2]:
+            if kw not in avoid:
+                modifiers.append(kw)
+
     if profile:
         if profile.get('needs_dog_friendly') and filters_dict['vibe'] == "Outside": modifiers.append("dog-friendly")
         if profile.get('vibe_preference'): modifiers.append(profile.get('vibe_preference'))
@@ -657,7 +719,7 @@ def get_wild_idea(user_id_str, lat, lng, location_name, profile_summary):
 # Eventbrite introduces a new discovery API.
 
 @retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3), retry=retry_if_not_exception_type(TimeoutError))
-def get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_name, target_date_str, relative_day, profile, excluded_spots, favorite_spots, mode="top_3", tier_personalities=None, lat=None, lng=None, radius_miles=20):
+def get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_name, target_date_str, relative_day, profile, excluded_spots, favorite_spots, mode="top_3", tier_personalities=None, lat=None, lng=None, radius_miles=20, preference_scores=None):
     client = OpenAI(api_key=OPENAI_API_KEY)
     
     trimmed_places = raw_places[:8] if isinstance(raw_places, list) and len(raw_places) > 8 else raw_places
@@ -680,6 +742,21 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
         profile_context = f"\nUSER BASELINE PROFILE:\n{stroller}\n{dog}\n{vibe_pref}\n{nonalc}\n{dietary}{history_context}"
 
     blacklist_context = f"CRITICAL: DO NOT RECOMMEND ANY OF THESE PLACES: {', '.join(excluded_spots)}" if excluded_spots else ""
+
+    taste_context = ""
+    if preference_scores and preference_scores.get('rated_count', 0) >= 2:
+        _count = preference_scores['rated_count']
+        _kws = preference_scores.get('top_keywords') or []
+        _cats = preference_scores.get('top_categories') or []
+        _parts = []
+        if _kws: _parts.append(f"Consistently enjoys: {', '.join(_kws)}")
+        if _cats: _parts.append(f"Top rated categories: {', '.join(_cats)}")
+        if _parts:
+            taste_context = (
+                f"\nUSER TASTE PROFILE (learned from {_count} saved spots):\n"
+                + "\n".join(_parts)
+                + "\nUse this to break ties between equally good options — lean toward what they've historically loved."
+            )
 
     if mode == "get_wild":
         instruction = """Select EXACTLY ONE option from the data. Assign it the category: 'Spontaneous Adventure'."""
@@ -798,7 +875,8 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
     system_prompt = f"""You are a local concierge for 'Get Wild'.
 
 CONTEXT: {location_name} | {weather_report} | {target_date_str} ({relative_day}) | {filters_dict['time']} | {filters_dict['group']}, {filters_dict['food']}, {filters_dict['vibe']}
-{profile_context}{blacklist_context}
+{profile_context}{taste_context}
+{blacklist_context}
 RULES:
 {geo_rule}
 {events_rule}
@@ -1045,7 +1123,8 @@ async def gather_all_data(lat, lng, semantic_query, distance, target_date_str, u
     places_task    = asyncio.to_thread(fetch_places_semantic, semantic_query, lat, lng, distance)
     excluded_task  = asyncio.to_thread(get_excluded_spots, user_id)
     favorites_task = asyncio.to_thread(get_favorite_spots, user_id)
-    return await asyncio.gather(weather_task, places_task, _events_with_timeout(), excluded_task, favorites_task)
+    prefs_task     = asyncio.to_thread(get_user_preference_scores, user_id)
+    return await asyncio.gather(weather_task, places_task, _events_with_timeout(), excluded_task, favorites_task, prefs_task)
 
 # ==========================================
 # 6. UI ROUTING
@@ -1329,7 +1408,8 @@ else:
                         status_loader.error("Couldn't find that location.")
                     else:
                         target_date_str, relative_day = get_local_target_date(lat, lng, st.session_state.mem_day)
-                        semantic_query = build_semantic_query(st.session_state.filters_dict, user_profile)
+                        pref_scores_pre = get_user_preference_scores(st.session_state.user.id)
+                        semantic_query = build_semantic_query(st.session_state.filters_dict, user_profile, pref_scores_pre)
 
                         status_loader.info("☁️ Curating local weather, places, and events...")
                         def _run_gather():
@@ -1339,11 +1419,11 @@ else:
                                 specific_keyword=st.session_state.filters_dict.get('specific', '')
                             )
                         try:
-                            weather_report, raw_places, live_events_data, db_excluded, user_favorites = asyncio.run(_run_gather())
+                            weather_report, raw_places, live_events_data, db_excluded, user_favorites, pref_scores = asyncio.run(_run_gather())
                         except RuntimeError:
                             import nest_asyncio
                             nest_asyncio.apply()
-                            weather_report, raw_places, live_events_data, db_excluded, user_favorites = asyncio.run(_run_gather())
+                            weather_report, raw_places, live_events_data, db_excluded, user_favorites, pref_scores = asyncio.run(_run_gather())
 
                         if st.session_state.current_mode == "get_wild":
                             status_loader.info("🎲 Loading up your adventure and revealing the spontaneity...")
@@ -1377,7 +1457,8 @@ else:
                                 target_date_str, relative_day, user_profile, all_excluded,
                                 user_favorites, mode=st.session_state.current_mode,
                                 tier_personalities=selected_tiers,
-                                lat=lat, lng=lng, radius_miles=st.session_state.mem_dist
+                                lat=lat, lng=lng, radius_miles=st.session_state.mem_dist,
+                                preference_scores=pref_scores
                             )
                             match_photos_to_results(ai_results.get('recommendations', []), raw_places, live_events_data)
                             st.session_state.current_results = ai_results
