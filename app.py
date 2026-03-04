@@ -34,6 +34,8 @@ TIER_PERSONALITIES = [
     {"tier_name": "The Adventure",      "description": "Gets you out of your comfort zone"},
 ]
 
+CACHE_VERSION = "v2"
+
 GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 TAVILY_API_KEY = st.secrets["TAVILY_API_KEY"]
@@ -182,7 +184,7 @@ def save_spot_to_db(user_id, name, address, category, rating=None, notes=""):
     except Exception as e: st.error("Database error.")
 
 def generate_cache_key(filters_dict, location_name, target_date_str, mode):
-    raw = json.dumps(filters_dict, sort_keys=True) + location_name + target_date_str + mode
+    raw = json.dumps(filters_dict, sort_keys=True) + location_name + target_date_str + mode + CACHE_VERSION
     return hashlib.md5(raw.encode()).hexdigest()
 
 def delete_spot_from_db(spot_id):
