@@ -7,13 +7,11 @@ import requests
 import json
 import urllib.parse
 import asyncio
-import concurrent.futures
 import pandas as pd
 import pydeck as pdk
 import time
 from openai import OpenAI
 from datetime import datetime, timedelta
-from dateutil import parser as dateutil_parser
 from streamlit_geolocation import streamlit_geolocation
 from supabase import create_client, Client
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_not_exception_type
@@ -38,7 +36,7 @@ CACHE_VERSION = "v2"
 
 GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
-TAVILY_API_KEY = st.secrets["TAVILY_API_KEY"]
+TICKETMASTER_API_KEY = st.secrets["TICKETMASTER_API_KEY"]
 OPENWEATHER_API_KEY = st.secrets["OPENWEATHER_API_KEY"] 
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
@@ -392,107 +390,79 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
     except: pass
     return []
 
-def fetch_live_events(location_name, intended_time, group_type, target_date_str, relative_day, lat, lng):
-    import re
-
-    US_STATES = {
-        "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado",
-        "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho",
-        "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana",
-        "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota",
-        "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada",
-        "New Hampshire", "New Jersey", "New Mexico", "New York",
-        "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon",
-        "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota",
-        "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington",
-        "West Virginia", "Wisconsin", "Wyoming"
-    }
-
+def fetch_live_events(lat, lng, radius_miles, target_date_str):
     try:
-        state_abbr, state_name = get_state_from_coords(lat, lng)
-        search_location = state_name if state_name else location_name
+        target_date = datetime.strptime(target_date_str, "%A, %B %d, %Y").date()
+        start_dt = f"{target_date.isoformat()}T00:00:00Z"
+        end_dt   = f"{(target_date + timedelta(days=1)).isoformat()}T00:00:00Z"
 
-        try:
-            target_date = dateutil_parser.parse(target_date_str).date()
-        except:
-            target_date = None
+        response = requests.get(
+            "https://app.ticketmaster.com/discovery/v2/events.json",
+            params={
+                "apikey":        TICKETMASTER_API_KEY,
+                "latlong":       f"{lat},{lng}",
+                "radius":        int(radius_miles),
+                "unit":          "miles",
+                "startDateTime": start_dt,
+                "endDateTime":   end_dt,
+                "size":          5,
+                "countryCode":   "US",
+                "sort":          "relevance,desc",
+            },
+            timeout=5,
+        )
+        if response.status_code != 200:
+            return []
 
-        url = "https://api.tavily.com/search"
-        queries = [
-            f"live music concerts events {target_date_str} {search_location}",
-            f"festivals theater shows activities {target_date_str} {search_location}"
-        ]
+        events_raw = response.json().get('_embedded', {}).get('events', [])
+        results = []
 
-        validated_results = []
+        for ev in events_raw:
+            venue = (ev.get('_embedded', {}).get('venues') or [{}])[0]
+            addr_parts = [
+                venue.get('address', {}).get('line1', ''),
+                venue.get('city', {}).get('name', ''),
+                venue.get('state', {}).get('stateCode', ''),
+            ]
+            venue_address = ', '.join(p for p in addr_parts if p)
 
-        def _tavily_search(query):
-            payload = {
-                "api_key": TAVILY_API_KEY,
-                "query": query,
-                "search_depth": "advanced",
-                "include_answer": False,
-                "max_results": 5
-            }
-            response = requests.post(url, json=payload, timeout=2.5)
-            return response.json().get('results', [])
+            start      = ev.get('dates', {}).get('start', {})
+            local_date = start.get('localDate', '')
+            try:
+                date_label = datetime.strptime(local_date, "%Y-%m-%d").strftime("%B %d, %Y")
+            except:
+                date_label = local_date
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
-            futures = {ex.submit(_tavily_search, q): q for q in queries}
-            for future in concurrent.futures.as_completed(futures):
+            raw_time = start.get('localTime', '')
+            if raw_time:
                 try:
-                    results = future.result()
+                    dt = datetime.strptime(raw_time, "%H:%M:%S")
+                    hour = dt.hour % 12 or 12
+                    start_time = f"{hour}:{dt.strftime('%M')} {'AM' if dt.hour < 12 else 'PM'}"
                 except:
-                    continue
+                    start_time = raw_time
+            else:
+                start_time = "Time TBD"
 
-                for r in results:
-                    snippet = r.get('content', '') or ''
-                    title = r.get('title', '')
-                    result_url = r.get('url', '')
+            images    = ev.get('images', [])
+            image_url = next(
+                (img['url'] for img in images if img.get('ratio') == '16_9' and img.get('width', 0) > 500),
+                images[0]['url'] if images else None
+            )
 
-                    # Reject results that mention another US state without mentioning our target state
-                    if state_name:
-                        foreign_state_only = False
-                        for state in US_STATES:
-                            if state != state_name and state.lower() in snippet.lower():
-                                if (state_name.lower() not in snippet.lower() and
-                                        (not state_abbr or state_abbr not in snippet)):
-                                    foreign_state_only = True
-                                    break
-                        if foreign_state_only:
-                            continue
+            results.append({
+                "title":         ev.get('name', ''),
+                "venue_name":    venue.get('name', ''),
+                "venue_address": venue_address,
+                "date_str":      date_label,
+                "start_time":    start_time,
+                "date_verified": True,
+                "url":           ev.get('url', ''),
+                "image_url":     image_url,
+                "snippet":       (ev.get('info') or ev.get('pleaseNote') or '')[:500],
+            })
 
-                    # Validate date against target
-                    date_verified = False
-                    if target_date:
-                        date_patterns = re.findall(
-                            r'\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|'
-                            r'Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)'
-                            r'\s+\d{1,2}(?:,?\s*\d{4})?\b',
-                            snippet, re.IGNORECASE
-                        )
-                        for dp in date_patterns:
-                            try:
-                                parsed = dateutil_parser.parse(
-                                    dp, default=datetime(target_date.year, 1, 1)
-                                ).date()
-                                if parsed == target_date:
-                                    date_verified = True
-                                    break
-                            except:
-                                pass
-
-                    validated_results.append({
-                        "title": title,
-                        "venue_name": "",
-                        "venue_address": "",
-                        "date_str": target_date_str,
-                        "start_time": "",
-                        "date_verified": date_verified,
-                        "url": result_url,
-                        "snippet": snippet[:500]
-                    })
-
-        return validated_results
+        return results
     except:
         return []
 
@@ -606,7 +576,7 @@ Return JSON with a 'recommendations' array. Each item: name, tier_name, category
             response_format={ "type": "json_object" },
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"GOOGLE PLACES DATA: {json.dumps(trimmed_places)}\n\nLIVE WEB SEARCH EVENTS:\n{json.dumps(safe_events_data) if isinstance(safe_events_data, list) else safe_events_data}"}
+                {"role": "user", "content": f"GOOGLE PLACES DATA: {json.dumps(trimmed_places)}\n\nLIVE TICKETMASTER EVENTS:\n{json.dumps(safe_events_data) if isinstance(safe_events_data, list) else safe_events_data}"}
             ],
             max_tokens=2500,
             timeout=30
@@ -624,7 +594,15 @@ Return JSON with a 'recommendations' array. Each item: name, tier_name, category
         
     return json.loads(raw_content)
 
-def match_photos_to_results(recommendations, raw_places):
+def match_photos_to_results(recommendations, raw_places, live_events=None):
+    # Build event image lookup keyed by normalised title
+    event_images = {}
+    for ev in (live_events or []):
+        title = ev.get('title', '').lower().replace(' ', '')
+        if title and ev.get('image_url'):
+            event_images[title] = ev['image_url']
+
+    # Build Google Places photo lookup (validated via HEAD request)
     place_photos = {}
     for place in (raw_places or []):
         name = place.get('displayName', {}).get('text', '').lower().replace(' ', '')
@@ -636,11 +614,31 @@ def match_photos_to_results(recommendations, raw_places):
                     place_photos[name] = url
             except:
                 pass
+
     for rec in recommendations:
         rec_name = rec.get('name', '').lower().replace(' ', '')
+
+        # 1. Exact event title match
+        if rec_name in event_images:
+            rec['photo_url'] = event_images[rec_name]
+            continue
+
+        # 2. Partial event title match
+        ev_matched = False
+        for ev_title, ev_img in event_images.items():
+            if ev_title in rec_name or rec_name in ev_title:
+                rec['photo_url'] = ev_img
+                ev_matched = True
+                break
+        if ev_matched:
+            continue
+
+        # 3. Google Places exact match
         if rec_name in place_photos:
             rec['photo_url'] = place_photos[rec_name]
             continue
+
+        # 4. Google Places partial match
         matched = False
         for place_name, url in place_photos.items():
             if place_name in rec_name or rec_name in place_name:
@@ -649,6 +647,7 @@ def match_photos_to_results(recommendations, raw_places):
                 break
         if not matched:
             rec['photo_url'] = None
+
     return recommendations
 
 def render_spot_card(spot, location_input, user_id, index, mode):
@@ -770,12 +769,12 @@ def render_spot_card(spot, location_input, user_id, index, mode):
 # ==========================================
 # 5. ASYNC DATA GATHERER
 # ==========================================
-async def gather_all_data(lat, lng, semantic_query, distance, location_input, intended_time, group_type, target_date_str, relative_day, user_id):
+async def gather_all_data(lat, lng, semantic_query, distance, target_date_str, user_id):
     async def _events_with_timeout():
         try:
             return await asyncio.wait_for(
-                asyncio.to_thread(fetch_live_events, location_input or "nearby", intended_time, group_type, target_date_str, relative_day, lat, lng),
-                timeout=3.0
+                asyncio.to_thread(fetch_live_events, lat, lng, distance, target_date_str),
+                timeout=5.0
             )
         except (asyncio.TimeoutError, Exception):
             return []
@@ -1019,9 +1018,8 @@ else:
                         status_loader.info("☁️ Curating local weather, places, and events...")
                         def _run_gather():
                             return gather_all_data(
-                                lat, lng, semantic_query, st.session_state.mem_dist, location_context,
-                                st.session_state.filters_dict['time'], st.session_state.filters_dict['group'],
-                                target_date_str, relative_day, st.session_state.user.id
+                                lat, lng, semantic_query, st.session_state.mem_dist,
+                                target_date_str, st.session_state.user.id
                             )
                         try:
                             weather_report, raw_places, live_events_data, db_excluded, user_favorites = asyncio.run(_run_gather())
@@ -1064,7 +1062,7 @@ else:
                                 tier_personalities=selected_tiers,
                                 lat=lat, lng=lng, radius_miles=st.session_state.mem_dist
                             )
-                            match_photos_to_results(ai_results.get('recommendations', []), raw_places)
+                            match_photos_to_results(ai_results.get('recommendations', []), raw_places, live_events_data)
                             st.session_state.current_results = ai_results
                             try:
                                 supabase.table('recommendation_cache').insert({
