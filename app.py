@@ -543,17 +543,17 @@ def render_spot_card(spot, location_input, user_id, index, mode):
     
     text_to_check = f"{spot['name']} {spot.get('category', '')} {spot.get('why_its_perfect', '')}".lower()
     if "music" in text_to_check or "concert" in text_to_check or "jazz" in text_to_check or "band" in text_to_check:
-        fallback_url = "https://source.unsplash.com/800x400/?live-music"
+        fallback_url = "https://images.unsplash.com/photo-1540039155732-d68a96670afb?w=800&q=80"
     elif "outdoor" in text_to_check or "park" in text_to_check or "garden" in text_to_check or "hike" in text_to_check:
-        fallback_url = "https://source.unsplash.com/800x400/?park-outdoor"
+        fallback_url = "https://images.unsplash.com/photo-1459749411175-04bf5292ceea?w=800&q=80"
     elif "food" in text_to_check or "restaurant" in text_to_check or "dining" in text_to_check or "eat" in text_to_check:
-        fallback_url = "https://source.unsplash.com/800x400/?restaurant"
+        fallback_url = "https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=800&q=80"
     elif "bar" in text_to_check or "brewery" in text_to_check or "cocktail" in text_to_check or "brew" in text_to_check:
-        fallback_url = "https://source.unsplash.com/800x400/?cocktail-bar"
+        fallback_url = "https://images.unsplash.com/photo-1575367439058-6096bb9cf5e2?w=800&q=80"
     elif "museum" in text_to_check or "art" in text_to_check or "gallery" in text_to_check:
-        fallback_url = "https://source.unsplash.com/800x400/?museum"
+        fallback_url = "https://images.unsplash.com/photo-1554907984-15263bfd63bd?w=800&q=80"
     else:
-        fallback_url = "https://source.unsplash.com/800x400/?city-nightlife"
+        fallback_url = "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80"
 
     img_url = spot.get('photo_url') or fallback_url
     img_html = f'<img src="{img_url}" class="wild-card-img" alt="">'
