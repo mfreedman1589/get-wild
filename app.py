@@ -75,14 +75,11 @@ custom_css = """
     
     @keyframes fadeSlideUp { from {opacity: 0; transform: translateY(20px);} to { opacity: 1; transform: translateY(0); } }
 
-    /* Dark mode text visibility */
+    /* Dark mode: only fix form input labels — let Streamlit handle everything else */
     @media (prefers-color-scheme: dark) {
         .stTextInput > label, .stSelectbox > label, .stRadio > label,
         .stCheckbox > label, .stTextArea > label, .stMultiSelect > label,
-        .stSlider > label, .stNumberInput > label { color: #fafafa !important; }
-        p, .stMarkdown p { color: #e0e0e0 !important; }
-        h1, h2, h3, h4 { color: #fafafa !important; }
-        .stMarkdown { color: #e0e0e0 !important; }
+        .stSlider > label, .stNumberInput > label { color: #f0f0f0 !important; }
     }
 </style>
 """
@@ -523,9 +520,9 @@ def render_spot_card(spot, location_input, user_id, index, mode):
 
     if spot.get('photo_ref'):
         img_url = f"https://places.googleapis.com/v1/{spot['photo_ref']}/media?key={GOOGLE_API_KEY}&maxHeightPx=400&maxWidthPx=800"
-        img_html = f'<img src="{img_url}" class="wild-card-img" onerror="this.onerror=null;this.src=\'{fallback_url}\'">'
     else:
-        img_html = f'<img src="{fallback_url}" class="wild-card-img">'
+        img_url = fallback_url
+    img_html = f'<img src="{img_url}" class="wild-card-img">'
     website_icon = f'<a href="{spot["website"]}" target="_blank" class="icon-btn" title="Visit Website">🌐</a>' if spot.get('website') else ""
 
     # Generate visual tag pills based on what the AI learned
