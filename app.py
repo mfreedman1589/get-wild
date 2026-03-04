@@ -1620,9 +1620,9 @@ else:
         _my_code = generate_referral_code(st.session_state.user.id)
         if _my_code:
             try:
-                _base_url = st.query_params.get("_stcore_base_url", "https://getwild.streamlit.app")
+                _base_url = st.query_params.get("_stcore_base_url", "https://get-wild.streamlit.app")
             except:
-                _base_url = "https://getwild.streamlit.app"
+                _base_url = "https://get-wild.streamlit.app"
             _invite_link = f"{_base_url}?ref={_my_code}"
             st.text_input("Your invite link", value=_invite_link, disabled=True, label_visibility="collapsed")
             _msg = f"Hey! Check out Get Wild — it finds the best local spots and experiences. Use my link to join and we both get bonus points! {_invite_link}"
