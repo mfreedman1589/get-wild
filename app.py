@@ -152,7 +152,7 @@ def delete_spot_from_db(spot_id):
             st.error("Delete failed: no matching record found.")
             return False
     except Exception as e:
-        st.error("Database error while deleting.")
+        st.error(f"Database error while deleting: {e}")
         return False
 
 # ==========================================
