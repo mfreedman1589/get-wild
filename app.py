@@ -143,6 +143,7 @@ if 'saved_spots_dirty' not in st.session_state: st.session_state.saved_spots_dir
 if 'fetch_timed_out' not in st.session_state: st.session_state.fetch_timed_out = False
 if 'skip_cache' not in st.session_state: st.session_state.skip_cache = False
 if 'show_onboarding' not in st.session_state: st.session_state.show_onboarding = False
+if 'wild_idea_dismissed' not in st.session_state: st.session_state.wild_idea_dismissed = False
 
 # Persistent memory state variables
 if 'mem_loc' not in st.session_state: st.session_state.mem_loc = ""
@@ -577,6 +578,70 @@ def fetch_live_events(lat, lng, radius_miles, target_date_str, specific_keyword=
         return results
     except:
         return []
+
+def _should_show_wild_idea(user_profile):
+    """All conditions must be true for the banner to render."""
+    if st.session_state.get('wild_idea_dismissed'):
+        return False
+    if not st.session_state.get('mem_gps_active') and not st.session_state.get('mem_loc'):
+        return False
+    last_str = (user_profile or {}).get('last_wild_idea_at')
+    if last_str:
+        try:
+            last_dt = datetime.fromisoformat(last_str[:19])
+            if datetime.utcnow() - last_dt < timedelta(hours=4):
+                return False
+        except:
+            pass
+    return True
+
+def _dismiss_wild_idea(user_id):
+    st.session_state.wild_idea_dismissed = True
+    try:
+        supabase.table('user_profiles').update(
+            {'last_wild_idea_at': datetime.utcnow().isoformat()}
+        ).eq('id', user_id).execute()
+    except:
+        pass
+
+@st.cache_data(ttl=14400)
+def get_wild_idea(user_id_str, lat, lng, location_name, profile_summary):
+    """Returns a dict {name, category, why_now, emoji} or None. Cached 4 h."""
+    try:
+        # Use UTC hour as a reasonable time-of-day approximation
+        h = datetime.utcnow().hour
+        if 6 <= h < 12:
+            time_context = "morning"
+        elif 12 <= h < 17:
+            time_context = "afternoon"
+        elif 17 <= h < 21:
+            time_context = "evening"
+        else:
+            time_context = "late night"
+
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            response_format={"type": "json_object"},
+            messages=[{"role": "user", "content": (
+                f"You are a spontaneous local guide. Based on the time of day "
+                f"({time_context}) and this user's preferences ({profile_summary}), "
+                f"suggest ONE specific, surprising local activity or venue near "
+                f"{location_name} (lat={lat:.3f}, lng={lng:.3f}). "
+                "Be specific and exciting. "
+                "Return JSON with exactly these keys: name, category, why_now "
+                "(one punchy sentence, max 12 words), emoji."
+            )}],
+            max_tokens=120,
+            timeout=10,
+        )
+        data = json.loads(response.choices[0].message.content.strip())
+        # Validate required keys present
+        if all(k in data for k in ("name", "category", "why_now", "emoji")):
+            return data
+    except:
+        pass
+    return None
 
 # NOTE: Eventbrite supplemental events source was evaluated and skipped.
 # Eventbrite's public event search API (GET /v3/events/search/ with lat/lng radius)
@@ -1030,6 +1095,60 @@ else:
         
         # --- SCREEN 1: THE INPUT FORM ---
         if not st.session_state.search_active:
+
+            # ---- HERE'S A WILD IDEA BANNER ----
+            if _should_show_wild_idea(user_profile):
+                _wi_lat, _wi_lng, _wi_loc = None, None, ""
+                if st.session_state.mem_gps_active and st.session_state.mem_geo_data:
+                    _wi_lat = st.session_state.mem_geo_data['latitude']
+                    _wi_lng = st.session_state.mem_geo_data['longitude']
+                    _wi_loc = "your current location"
+                elif st.session_state.mem_loc:
+                    _wi_lat, _wi_lng = get_coordinates(st.session_state.mem_loc)
+                    _wi_loc = st.session_state.mem_loc
+
+                if _wi_lat:
+                    _prof_parts = []
+                    if user_profile:
+                        if user_profile.get('vibe_preference'): _prof_parts.append(user_profile['vibe_preference'])
+                        if user_profile.get('needs_nonalcoholic'): _prof_parts.append("non-alcoholic")
+                        if user_profile.get('dietary_restrictions'): _prof_parts.append(user_profile['dietary_restrictions'])
+                    _prof_summary = ", ".join(_prof_parts) if _prof_parts else "no specific preferences"
+
+                    _idea = get_wild_idea(
+                        str(st.session_state.user.id), _wi_lat, _wi_lng, _wi_loc, _prof_summary
+                    )
+                    if _idea:
+                        st.markdown(f"""
+<div style="background:linear-gradient(135deg,#2d6a4f 0%,#52b788 100%);color:white;border-radius:12px;padding:16px 20px;margin-bottom:8px;">
+  <div style="font-size:0.72rem;font-weight:700;letter-spacing:1.2px;opacity:0.85;margin-bottom:6px;">💡 HERE'S A WILD IDEA...</div>
+  <div style="font-size:1.1rem;font-weight:700;margin-bottom:3px;">{_idea['emoji']} {_idea['name']}</div>
+  <div style="font-size:0.88rem;opacity:0.92;">{_idea['why_now']}</div>
+</div>""", unsafe_allow_html=True)
+                        _wi_col1, _wi_col2, _wi_col3 = st.columns([2, 1, 3])
+                        with _wi_col1:
+                            if st.button("🎲 Let's Do It", key="wild_idea_go", type="primary", use_container_width=True):
+                                _dismiss_wild_idea(st.session_state.user.id)
+                                award_points(st.session_state.user.id, "wild_idea", 3, "Completed a Here's a Wild Idea")
+                                st.session_state.mem_spec  = _idea['name']
+                                st.session_state.current_mode = "get_wild"
+                                st.session_state.filters_dict = {
+                                    "group":    st.session_state.mem_group,
+                                    "time":     f"{st.session_state.mem_day} ({st.session_state.mem_time})",
+                                    "vibe":     st.session_state.mem_vibe,
+                                    "food":     st.session_state.mem_food,
+                                    "specific": _idea['name'],
+                                }
+                                st.session_state.search_active = True
+                                st.session_state.trigger_fetch = True
+                                st.session_state.session_seen_spots = []
+                                st.rerun()
+                        with _wi_col2:
+                            if st.button("✕ Dismiss", key="wild_idea_dismiss", use_container_width=True):
+                                _dismiss_wild_idea(st.session_state.user.id)
+                                st.rerun()
+            # ---- END WILD IDEA BANNER ----
+
             st.subheader("Where are we going?")
             loc_col1, loc_col2 = st.columns([5, 1])
             
