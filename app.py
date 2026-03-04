@@ -296,7 +296,7 @@ def fetch_live_events(location_name, intended_time, group_type, target_date_str,
                 "include_answer": False,
                 "max_results": 5
             }
-            response = requests.post(url, json=payload, timeout=15)
+            response = requests.post(url, json=payload, timeout=2.5)
             return response.json().get('results', [])
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
@@ -530,21 +530,20 @@ def render_spot_card(spot, location_input, user_id, index, mode):
 # 5. ASYNC DATA GATHERER
 # ==========================================
 async def gather_all_data(lat, lng, semantic_query, distance, location_input, intended_time, group_type, target_date_str, relative_day, user_id):
-    _t0 = time.time()
-    _timings = {}
+    async def _events_with_timeout():
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(fetch_live_events, location_input or "nearby", intended_time, group_type, target_date_str, relative_day, lat, lng),
+                timeout=3.0
+            )
+        except (asyncio.TimeoutError, Exception):
+            return []
 
-    async def _timed(label, coro):
-        result = await coro
-        _timings[label] = round(time.time() - _t0, 2)
-        return result
-
-    weather_task   = _timed("weather",   asyncio.to_thread(get_live_weather, lat, lng))
-    places_task    = _timed("places",    asyncio.to_thread(fetch_places_semantic, semantic_query, lat, lng, distance))
-    events_task    = _timed("events",    asyncio.to_thread(fetch_live_events, location_input or "nearby", intended_time, group_type, target_date_str, relative_day, lat, lng))
-    excluded_task  = _timed("excluded",  asyncio.to_thread(get_excluded_spots, user_id))
-    favorites_task = _timed("favorites", asyncio.to_thread(get_favorite_spots, user_id))
-    results = await asyncio.gather(weather_task, places_task, events_task, excluded_task, favorites_task)
-    return (*results, _timings)
+    weather_task   = asyncio.to_thread(get_live_weather, lat, lng)
+    places_task    = asyncio.to_thread(fetch_places_semantic, semantic_query, lat, lng, distance)
+    excluded_task  = asyncio.to_thread(get_excluded_spots, user_id)
+    favorites_task = asyncio.to_thread(get_favorite_spots, user_id)
+    return await asyncio.gather(weather_task, places_task, _events_with_timeout(), excluded_task, favorites_task)
 
 # ==========================================
 # 6. UI ROUTING
@@ -696,18 +695,13 @@ else:
                     if st.session_state.mem_gps_active and st.session_state.mem_geo_data:
                         lat, lng = st.session_state.mem_geo_data['latitude'], st.session_state.mem_geo_data['longitude']
                         location_context = "exact GPS coordinates"
-                        st.write(f"⏱ get_coordinates: skipped (GPS)")
                     else:
-                        _t = time.time()
                         lat, lng = get_coordinates(st.session_state.mem_loc)
-                        st.write(f"⏱ get_coordinates: {round(time.time()-_t,2)}s")
 
                     if lat is None:
                         status_loader.error("Couldn't find that location.")
                     else:
-                        _t = time.time()
                         target_date_str, relative_day = get_local_target_date(lat, lng, st.session_state.mem_day)
-                        st.write(f"⏱ get_local_target_date: {round(time.time()-_t,2)}s (cached→near-zero expected)")
                         semantic_query = build_semantic_query(st.session_state.filters_dict, user_profile)
 
                         status_loader.info("☁️ Curating local weather, places, and events...")
@@ -717,16 +711,12 @@ else:
                                 st.session_state.filters_dict['time'], st.session_state.filters_dict['group'],
                                 target_date_str, relative_day, st.session_state.user.id
                             )
-                        _t = time.time()
                         try:
-                            weather_report, raw_places, live_events_data, db_excluded, user_favorites, _gather_timings = asyncio.run(_run_gather())
+                            weather_report, raw_places, live_events_data, db_excluded, user_favorites = asyncio.run(_run_gather())
                         except RuntimeError:
                             import nest_asyncio
                             nest_asyncio.apply()
-                            weather_report, raw_places, live_events_data, db_excluded, user_favorites, _gather_timings = asyncio.run(_run_gather())
-                        _gather_total = round(time.time()-_t, 2)
-                        st.write(f"⏱ asyncio.gather total: {_gather_total}s")
-                        st.write(f"⏱ gather task finish times (seconds after gather start): {_gather_timings}")
+                            weather_report, raw_places, live_events_data, db_excluded, user_favorites = asyncio.run(_run_gather())
 
                         if st.session_state.current_mode == "get_wild":
                             status_loader.info("🎲 Loading up your adventure and revealing the spontaneity...")
@@ -741,7 +731,6 @@ else:
                             target_date_str, st.session_state.current_mode
                         )
                         cached_result = None
-                        _t = time.time()
                         try:
                             cutoff = (datetime.utcnow() - timedelta(hours=2)).isoformat()
                             rows = supabase.table('recommendation_cache').select('result_json').eq('cache_key', cache_key).gte('created_at', cutoff).limit(1).execute()
@@ -749,12 +738,9 @@ else:
                                 cached_result = json.loads(rows.data[0]['result_json'])
                         except:
                             pass
-                        st.write(f"⏱ cache lookup: {round(time.time()-_t,2)}s — {'HIT' if cached_result else 'MISS'}")
 
-                        _t = time.time()
                         if cached_result:
                             st.session_state.current_results = cached_result
-                            st.write(f"⏱ get_ai_recommendations: skipped (cache hit)")
                         else:
                             st.session_state.current_results = get_ai_recommendations(
                                 raw_places, live_events_data, weather_report,
@@ -762,7 +748,6 @@ else:
                                 target_date_str, relative_day, user_profile, all_excluded,
                                 user_favorites, mode=st.session_state.current_mode
                             )
-                            st.write(f"⏱ get_ai_recommendations: {round(time.time()-_t,2)}s")
                             try:
                                 supabase.table('recommendation_cache').insert({
                                     'cache_key': cache_key,
