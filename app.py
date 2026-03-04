@@ -4,7 +4,7 @@ import streamlit.components.v1 as components
 import requests
 import json
 import urllib.parse
-import asyncio
+import concurrent.futures
 import pandas as pd
 import pydeck as pdk
 import time
@@ -164,6 +164,7 @@ def get_coordinates(location_query):
     except: pass
     return None, None
 
+@st.cache_data(ttl=86400)
 def get_local_target_date(lat, lng, day_choice):
     timestamp = int(time.time())
     url = f"https://maps.googleapis.com/maps/api/timezone/json?location={lat},{lng}&timestamp={timestamp}&key={GOOGLE_API_KEY}"
@@ -286,7 +287,7 @@ def fetch_live_events(location_name, intended_time, group_type, target_date_str,
 
         validated_results = []
 
-        for query in queries:
+        def _tavily_search(query):
             payload = {
                 "api_key": TAVILY_API_KEY,
                 "query": query,
@@ -294,10 +295,16 @@ def fetch_live_events(location_name, intended_time, group_type, target_date_str,
                 "include_answer": False,
                 "max_results": 5
             }
-            try:
-                response = requests.post(url, json=payload, timeout=15)
-                data = response.json()
-                results = data.get('results', [])
+            response = requests.post(url, json=payload, timeout=15)
+            return response.json().get('results', [])
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+            futures = {ex.submit(_tavily_search, q): q for q in queries}
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    results = future.result()
+                except:
+                    continue
 
                 for r in results:
                     snippet = r.get('content', '') or ''
@@ -346,8 +353,6 @@ def fetch_live_events(location_name, intended_time, group_type, target_date_str,
                         "url": result_url,
                         "snippet": snippet[:500]
                     })
-            except:
-                continue
 
         return validated_results
     except:
@@ -509,13 +514,32 @@ def render_spot_card(spot, location_input, user_id, index, mode):
             save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'), rating=1, notes="Blacklisted via quick-button.")
 
 # ==========================================
-# 5. ASYNC DATA GATHERER 
+# 5. PARALLEL DATA GATHERER
 # ==========================================
-async def gather_all_data(lat, lng, semantic_query, distance, location_input, intended_time, group_type, target_date_str, relative_day):
-    weather_task = asyncio.to_thread(get_live_weather, lat, lng)
-    places_task = asyncio.to_thread(fetch_places_semantic, semantic_query, lat, lng, distance)
-    events_task = asyncio.to_thread(fetch_live_events, location_input if location_input else "nearby", intended_time, group_type, target_date_str, relative_day, lat, lng)
-    return await asyncio.gather(weather_task, places_task, events_task)
+def gather_all_data(lat, lng, semantic_query, distance, location_input, intended_time, group_type, target_date_str, relative_day, user_id):
+    tasks = {
+        "weather":  (get_live_weather,        (lat, lng)),
+        "places":   (fetch_places_semantic,   (semantic_query, lat, lng, distance)),
+        "events":   (fetch_live_events,       (location_input or "nearby", intended_time, group_type, target_date_str, relative_day, lat, lng)),
+        "excluded": (get_excluded_spots,      (user_id,)),
+        "favorites":(get_favorite_spots,      (user_id,)),
+    }
+    results = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+        futures = {ex.submit(fn, *args): key for key, (fn, args) in tasks.items()}
+        for future in concurrent.futures.as_completed(futures):
+            key = futures[future]
+            try:
+                results[key] = future.result()
+            except:
+                results[key] = None
+    return (
+        results["weather"],
+        results["places"],
+        results["events"],
+        results["excluded"],
+        results["favorites"],
+    )
 
 # ==========================================
 # 6. UI ROUTING
@@ -677,20 +701,19 @@ else:
                         semantic_query = build_semantic_query(st.session_state.filters_dict, user_profile)
                         
                         status_loader.info("☁️ Curating local weather, places, and events...")
-                        weather_report, raw_places, live_events_data = asyncio.run(
-                            gather_all_data(lat, lng, semantic_query, st.session_state.mem_dist, location_context, st.session_state.filters_dict['time'], st.session_state.filters_dict['group'], target_date_str, relative_day)
+                        weather_report, raw_places, live_events_data, db_excluded, user_favorites = gather_all_data(
+                            lat, lng, semantic_query, st.session_state.mem_dist, location_context,
+                            st.session_state.filters_dict['time'], st.session_state.filters_dict['group'],
+                            target_date_str, relative_day, st.session_state.user.id
                         )
-                        
+
                         if st.session_state.current_mode == "get_wild":
                             status_loader.info("🎲 Loading up your adventure and revealing the spontaneity...")
                         else:
                             status_loader.info("🗺️ Assembling your perfect itinerary...")
-                        
-                        db_excluded = get_excluded_spots(st.session_state.user.id)
-                        all_excluded = list(set(db_excluded + st.session_state.session_seen_spots))
-                        
-                        # NEW: Fetch favorites to feed the AI
-                        user_favorites = get_favorite_spots(st.session_state.user.id)
+
+                        all_excluded = list(set((db_excluded or []) + st.session_state.session_seen_spots))
+                        user_favorites = user_favorites or []
                         
                         cache_key = generate_cache_key(
                             st.session_state.filters_dict, location_context,
