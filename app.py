@@ -217,12 +217,11 @@ def delete_spot_from_db(spot_id):
         return False
 
 def increment_wild_counter(city):
-    st.write("DEBUG: increment called")
     try:
         today = datetime.utcnow().date().isoformat()
-        supabase.rpc('increment_wild_counter', {'p_search_date': today, 'p_city': city}).execute()
-    except Exception as e:
-        st.error(f"Counter error: {e}")
+        supabase.rpc('increment_wild_counter', {'p_date': today, 'p_city': city}).execute()
+    except:
+        pass
 
 def get_wild_count_today():
     try:
@@ -798,7 +797,6 @@ else:
             with btn_col2: get_wild_clicked = st.button("🎲 GET WILD", type="primary", use_container_width=True)
 
             wild_count = get_wild_count_today()
-            st.write(f"DEBUG wild count: {wild_count}")
             if wild_count is not None and wild_count > 0:
                 st.markdown(f"<div style='text-align:center;color:#e65100;font-weight:600;font-size:0.9rem;margin-top:4px;'>🔥 {wild_count} {'person' if wild_count == 1 else 'people'} got wild today — join them</div>", unsafe_allow_html=True)
 
