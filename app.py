@@ -1,4 +1,5 @@
 import hashlib
+import random
 import streamlit as st
 import streamlit.components.v1 as components
 import requests
@@ -19,6 +20,19 @@ from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_not_e
 # ==========================================
 # 1. CONFIGURATION & SECRETS
 # ==========================================
+TIER_PERSONALITIES = [
+    {"tier_name": "The Crowd-Pleaser",  "description": "A highly rated safe bet everyone will enjoy"},
+    {"tier_name": "The Hidden Gem",     "description": "Quirky, unique, or off the beaten path"},
+    {"tier_name": "The Fresh Take",     "description": "New, trending, or a live event happening now"},
+    {"tier_name": "The Local Favorite", "description": "Where locals actually go, not tourists"},
+    {"tier_name": "The Wild Card",      "description": "Unexpected and spontaneous — trust the process"},
+    {"tier_name": "The Date Night Pick","description": "Intimate, romantic, and impressive"},
+    {"tier_name": "The Comeback Kid",   "description": "An old classic that's been reinvented or is having a moment"},
+    {"tier_name": "The Underdog",       "description": "Lesser known but punches above its weight"},
+    {"tier_name": "The Vibe Match",     "description": "Perfectly matches the specific mood requested"},
+    {"tier_name": "The Adventure",      "description": "Gets you out of your comfort zone"},
+]
+
 GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 TAVILY_API_KEY = st.secrets["TAVILY_API_KEY"]
@@ -367,7 +381,7 @@ def fetch_live_events(location_name, intended_time, group_type, target_date_str,
         return []
 
 @retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3), retry=retry_if_not_exception_type(TimeoutError))
-def get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_name, target_date_str, relative_day, profile, excluded_spots, favorite_spots, mode="top_3"):
+def get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_name, target_date_str, relative_day, profile, excluded_spots, favorite_spots, mode="top_3", tier_personalities=None):
     client = OpenAI(api_key=OPENAI_API_KEY)
     
     trimmed_places = raw_places[:8] if isinstance(raw_places, list) and len(raw_places) > 8 else raw_places
@@ -394,12 +408,12 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
     if mode == "get_wild":
         instruction = """Select EXACTLY ONE option from the data. Assign it the category: 'Spontaneous Adventure'."""
     else:
-        instruction = """
-        Return EXACTLY 3 options from the data, providing STRICT VARIETY (do not return 3 of the exact same type of venue). 
+        tiers = tier_personalities or TIER_PERSONALITIES[:3]
+        tier_lines = "\n".join(f"        {i+1}. '{t['tier_name']}': {t['description']}." for i, t in enumerate(tiers))
+        instruction = f"""
+        Return EXACTLY 3 options from the data, providing STRICT VARIETY (do not return 3 of the exact same type of venue).
         Assign each to one of these directional 'tier_name' categories:
-        1. 'The Crowd-Pleaser': A highly rated, established safe bet that closely aligns with their profile and past favorites.
-        2. 'The Fresh Take': A live event from the web search, a trending new spot, or something catching on.
-        3. 'The Hidden Gem': Something quirky, unique, or slightly off the beaten path.
+{tier_lines}
         """
 
     if filters_dict.get('vibe') == "Outside":
@@ -738,11 +752,13 @@ else:
                         if cached_result:
                             st.session_state.current_results = cached_result
                         else:
+                            selected_tiers = random.sample(TIER_PERSONALITIES, 3) if st.session_state.current_mode != "get_wild" else None
                             st.session_state.current_results = get_ai_recommendations(
                                 raw_places, live_events_data, weather_report,
                                 st.session_state.filters_dict, location_context,
                                 target_date_str, relative_day, user_profile, all_excluded,
-                                user_favorites, mode=st.session_state.current_mode
+                                user_favorites, mode=st.session_state.current_mode,
+                                tier_personalities=selected_tiers
                             )
                             try:
                                 supabase.table('recommendation_cache').insert({
