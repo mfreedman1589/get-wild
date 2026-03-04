@@ -1,4 +1,5 @@
 import hashlib
+import math
 import random
 import streamlit as st
 import streamlit.components.v1 as components
@@ -58,53 +59,9 @@ custom_css = """
     .hero-title { color: #2e7d32; font-family: 'Helvetica Neue', sans-serif; font-size: 3.5rem; font-weight: 800; letter-spacing: -1px; text-transform: uppercase; margin-bottom: 0; line-height: 1.1; }
     .hero-subtitle { color: #558b2f; font-size: 1.2rem; font-weight: 400; letter-spacing: 1px; margin-top: 10px; }
 
-    /* CARD — .wc-shell is the always-visible fallback card border.
-       stVerticalBlock :has() is the progressive enhancement (attaches buttons inside card).
-       When the container approach works it strips .wc-shell's own border to avoid doubling. */
-    .wc-shell {
-        border: 1px solid #e0e0e0;
-        border-radius: 12px 12px 0 0;
-        box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-        overflow: hidden;
-        background: #ffffff;
-        margin: 16px 0 0 0;
-        animation: fadeSlideUp 0.5s ease-out forwards;
-    }
-    .wc-shell-special {
-        border: 2px solid #2d6a4f !important;
-        box-shadow: 0 0 20px rgba(45,106,79,0.4), 0 0 40px rgba(45,106,79,0.2) !important;
-        animation: fadeSlideUp 0.5s ease-out, wildGlow 3s ease-in-out 0.5s infinite !important;
-    }
-    @keyframes wildGlow {
-        0%, 100% { box-shadow: 0 0 20px rgba(45,106,79,0.4), 0 0 40px rgba(45,106,79,0.2); }
-        50%       { box-shadow: 0 0 30px rgba(45,106,79,0.6), 0 0 60px rgba(45,106,79,0.3); }
-    }
-
-    /* Enhanced container (progressive enhancement via :has()) */
-    div[data-testid="stVerticalBlock"]:has(.wc-shell):not(:has([data-testid="stVerticalBlock"]:has(.wc-shell))) {
-        background: #ffffff;
-        border-radius: 12px;
-        box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-        border: 1px solid #e0e0e0;
-        overflow: hidden;
-        margin: 16px 0 24px 0;
-        gap: 0 !important;
-        animation: fadeSlideUp 0.5s ease-out forwards;
-    }
-    div[data-testid="stVerticalBlock"]:has(.wc-shell-special):not(:has([data-testid="stVerticalBlock"]:has(.wc-shell-special))) {
-        border: 2px solid #2d6a4f !important;
-        animation: fadeSlideUp 0.5s ease-out, wildGlow 3s ease-in-out 0.5s infinite !important;
-    }
-    /* When container approach active: strip fallback styling from .wc-shell */
-    div[data-testid="stVerticalBlock"]:has(.wc-shell):not(:has([data-testid="stVerticalBlock"]:has(.wc-shell))) .wc-shell {
-        border: none !important; box-shadow: none !important;
-        border-radius: 0 !important; margin: 0 !important; animation: none !important;
-    }
-    /* Button row: attached inside card with top separator */
-    div[data-testid="stVerticalBlock"]:has(.wc-shell):not(:has([data-testid="stVerticalBlock"]:has(.wc-shell))) [data-testid="stHorizontalBlock"] {
-        border-top: 1px solid #f0f0f0;
-        padding: 8px 16px 12px;
-    }
+    /* CARD — per-card <style> injection (in render_spot_card) handles border/shadow.
+       .wc-shell is structural only (image overflow clipping). */
+    .wc-shell { overflow: hidden; }
 
     /* Card inner content */
     .wc-img-wrap { position: relative; width: 100%; height: 200px; overflow: hidden; }
@@ -130,16 +87,6 @@ custom_css = """
         .stTextInput > label, .stSelectbox > label, .stRadio > label,
         .stCheckbox > label, .stTextArea > label, .stMultiSelect > label,
         .stSlider > label, .stNumberInput > label { color: #f0f0f0 !important; }
-        .wc-shell { background: #1e1e1e !important; border-color: #333 !important; }
-        div[data-testid="stVerticalBlock"]:has(.wc-shell):not(:has([data-testid="stVerticalBlock"]:has(.wc-shell))) {
-            background: #1e1e1e !important; border-color: #333 !important;
-        }
-        div[data-testid="stVerticalBlock"]:has(.wc-shell):not(:has([data-testid="stVerticalBlock"]:has(.wc-shell))) .wc-shell {
-            background: transparent !important;
-        }
-        div[data-testid="stVerticalBlock"]:has(.wc-shell):not(:has([data-testid="stVerticalBlock"]:has(.wc-shell))) [data-testid="stHorizontalBlock"] {
-            border-top-color: #333 !important; background: #1e1e1e !important;
-        }
         .wc-name { color: #f0f0f0 !important; }
         .wc-meta, .wc-address { color: #999 !important; }
         .wc-pitch { color: #ccc !important; }
@@ -150,6 +97,10 @@ custom_css = """
     }
 
     @keyframes fadeSlideUp { from {opacity: 0; transform: translateY(20px);} to { opacity: 1; transform: translateY(0); } }
+    @keyframes wildGlow {
+        0%, 100% { box-shadow: 0 0 20px rgba(45,106,79,0.4), 0 0 40px rgba(45,106,79,0.2); }
+        50%       { box-shadow: 0 0 30px rgba(45,106,79,0.6), 0 0 60px rgba(45,106,79,0.3); }
+    }
 </style>
 """
 st.markdown(custom_css, unsafe_allow_html=True)
@@ -350,6 +301,14 @@ def build_semantic_query(filters_dict, profile):
     exclusion = " NOT bar NOT brewery NOT restaurant NOT cafe" if no_food else ""
     return f"{modifier_str} {base}{exclusion}".strip()
 
+def haversine_miles(lat1, lon1, lat2, lon2):
+    R = 3958.8
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
+    return 2 * R * math.asin(math.sqrt(a))
+
 def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
     url = "https://places.googleapis.com/v1/places:searchText"
     headers = {
@@ -376,7 +335,20 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
                 else:
                     place['photo_ref'] = None
                     place['photo_url'] = None
-            return places
+            # Python-side distance filter (Google Places API ignores radius for text search)
+            threshold = radius_miles * 1.5
+            filtered = []
+            for place in places:
+                loc = place.get('location', {})
+                plat, plng = loc.get('latitude'), loc.get('longitude')
+                if plat and plng:
+                    dist = haversine_miles(lat, lng, plat, plng)
+                    place['distance_miles'] = round(dist, 1)
+                    if dist <= threshold:
+                        filtered.append(place)
+                else:
+                    filtered.append(place)
+            return filtered
     except: pass
     return []
 
@@ -669,16 +641,35 @@ def render_spot_card(spot, location_input, user_id, index, mode):
         f'<a href="{map_url}" target="_blank" class="wc-util-link">🗺️ Directions</a>{sep}'
         f'<a href="{uber_url}" target="_blank" class="wc-util-link">🚗 Uber</a>{sep}'
         f'<a href="sms:?body={share_encoded}" class="wc-util-link">📱 Text</a>{sep}'
-        f'<a href="mailto:?subject={share_subj_enc}&body={share_body_enc}" class="wc-util-link">📧 Email</a>{sep}'
-        f'<a href="https://wa.me/?text={share_encoded}" target="_blank" class="wc-util-link">💬 WhatsApp</a>'
+        f'<a href="mailto:?subject={share_subj_enc}&body={share_body_enc}" class="wc-util-link">📧 Email</a>'
         f'</div>'
     )
 
+    # Per-card injected style: targets the st.container() stVerticalBlock
+    # that immediately follows the stMarkdown containing the anchor div.
+    anchor_id = f"wca{index}"
     if mode == "get_wild":
-        st.markdown('<p style="color:#2d6a4f;font-weight:700;font-size:1.05rem;margin:8px 0 4px 0;">🎲 Your Wild Adventure Awaits</p>', unsafe_allow_html=True)
+        border_css  = "2px solid #2d6a4f"
+        shadow_css  = "0 0 20px rgba(45,106,79,0.4),0 0 40px rgba(45,106,79,0.2)"
+        anim_css    = "fadeSlideUp 0.5s ease-out,wildGlow 3s ease-in-out 0.5s infinite"
+        dark_border = "#2d6a4f"
+        header_html = '<p style="color:#2d6a4f;font-weight:700;font-size:1.05rem;margin:8px 0 4px 0;">🎲 Your Wild Adventure Awaits</p>'
+    else:
+        border_css  = "1px solid #e0e0e0"
+        shadow_css  = "0 2px 12px rgba(0,0,0,0.08)"
+        anim_css    = "fadeSlideUp 0.5s ease-out forwards"
+        dark_border = "#333"
+        header_html = ""
+    st.markdown(
+        f'<style>'
+        f'div:has(#{anchor_id})+div[data-testid="stVerticalBlock"]{{border:{border_css};border-radius:12px;box-shadow:{shadow_css};overflow:hidden;background:#fff;margin:0 0 24px 0;gap:0!important;animation:{anim_css}}}'
+        f'div:has(#{anchor_id})+div[data-testid="stVerticalBlock"] [data-testid="stHorizontalBlock"]{{border-top:1px solid #f0f0f0;padding:8px 16px 12px}}'
+        f'@media(prefers-color-scheme:dark){{div:has(#{anchor_id})+div[data-testid="stVerticalBlock"]{{background:#1e1e1e!important;border-color:{dark_border}!important}}div:has(#{anchor_id})+div[data-testid="stVerticalBlock"] [data-testid="stHorizontalBlock"]{{background:#1e1e1e!important;border-top-color:#333!important}}}}'
+        f'</style>{header_html}<div id="{anchor_id}"></div>',
+        unsafe_allow_html=True
+    )
 
-    shell_cls = "wc-shell" + (" wc-shell-special" if mode == "get_wild" else "")
-    html_card = f"""<div class="{shell_cls}">
+    html_card = f"""<div class="wc-shell">
   <div class="wc-img-wrap">
     <img src="{img_url}" class="wc-img" alt="">
     <div class="wc-tier">✦ {tier_name}</div>
