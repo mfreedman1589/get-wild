@@ -466,6 +466,12 @@ def fetch_live_events(lat, lng, radius_miles, target_date_str):
     except:
         return []
 
+# NOTE: Eventbrite supplemental events source was evaluated and skipped.
+# Eventbrite's public event search API (GET /v3/events/search/ with lat/lng radius)
+# was permanently removed on Feb 20, 2020. As of 2025 the API is effectively
+# unsupported — no global search endpoint exists on any tier. Skip unless
+# Eventbrite introduces a new discovery API.
+
 @retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3), retry=retry_if_not_exception_type(TimeoutError))
 def get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_name, target_date_str, relative_day, profile, excluded_spots, favorite_spots, mode="top_3", tier_personalities=None, lat=None, lng=None, radius_miles=20):
     client = OpenAI(api_key=OPENAI_API_KEY)
@@ -699,19 +705,34 @@ def render_spot_card(spot, location_input, user_id, index, mode):
         for tag in matched_tags:
             tags_html += f'<span class="wc-tag">✓ {tag}</span>'
 
-    tier_name = spot.get('tier_name', 'Top Pick')
-    category  = spot.get('category', '')
-    vibe      = spot.get('vibe_check', '')
-    address   = spot.get('address', '')
-    pitch     = spot.get('why_its_perfect', '')
+    tier_name  = spot.get('tier_name', 'Top Pick')
+    category   = spot.get('category', '')
+    vibe       = spot.get('vibe_check', '')
+    address    = spot.get('address', '')
+    pitch      = spot.get('why_its_perfect', '')
+    start_time = spot.get('start_time', '')
+    venue_name = spot.get('venue_name', '')
 
-    # Utility row links
+    # Event time line shown below venue name (Ticketmaster events only)
+    is_event = bool(spot.get('image_url')) or any(k in (category or '') for k in ['Event', 'Music', 'Sports', 'Concert', 'Arts'])
+    event_time_html = ''
+    if is_event and start_time and start_time != 'Time TBD':
+        time_line = f"🕐 {start_time}"
+        if venue_name:
+            time_line += f" · {venue_name}"
+        event_time_html = f'<div class="wc-meta" style="margin-bottom:8px;">{time_line}</div>'
+
+    # Utility row links — "Get Tickets" for events, "Website" for places
     share_text     = f"Let's go to {spot['name']}! {address}\n{map_url}"
     share_encoded  = urllib.parse.quote(share_text)
     share_subj_enc = urllib.parse.quote(f"Wild Plan: {spot['name']}")
     share_body_enc = urllib.parse.quote(share_text)
     sep = '<span class="wc-util-sep">|</span>'
-    website_part = f'<a href="{spot["website"]}" target="_blank" class="wc-util-link">🌐 Website</a>{sep}' if spot.get('website') else ''
+    if spot.get('website'):
+        link_label = '🎟️ Get Tickets' if is_event else '🌐 Website'
+        website_part = f'<a href="{spot["website"]}" target="_blank" class="wc-util-link">{link_label}</a>{sep}'
+    else:
+        website_part = ''
     utility_html = (
         f'<div class="wc-utility">'
         f'{website_part}'
@@ -745,7 +766,7 @@ def render_spot_card(spot, location_input, user_id, index, mode):
   <div class="wc-body">
     <div class="wc-name">{title_prefix} {spot['name']}</div>
     <div class="wc-meta">{category} • ✨ {vibe}</div>
-    <div class="wc-address">📍 {address}</div>
+    {event_time_html}<div class="wc-address">📍 {address}</div>
     {utility_html}
     <hr class="wc-hr">
     <p class="wc-pitch">{pitch}</p>
