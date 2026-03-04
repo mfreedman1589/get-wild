@@ -53,35 +53,48 @@ st.set_page_config(page_title="Get Wild", page_icon="🌿", layout="centered")
 
 custom_css = """
 <style>
+    /* HERO */
     .hero-header { text-align: center; padding: 2rem 0 1rem 0; }
     .hero-title { color: #2e7d32; font-family: 'Helvetica Neue', sans-serif; font-size: 3.5rem; font-weight: 800; letter-spacing: -1px; text-transform: uppercase; margin-bottom: 0; line-height: 1.1; }
     .hero-subtitle { color: #558b2f; font-size: 1.2rem; font-weight: 400; letter-spacing: 1px; margin-top: 10px; }
-    
-    .wild-card { background: #ffffff; border: 1px solid #e0e0e0; border-radius: 16px; overflow: hidden; margin-top: 20px; margin-bottom: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.06); animation: fadeSlideUp 0.6s ease-out forwards; }
-    .get-wild-special { border: 2px solid #FFD700; box-shadow: 0 0 20px rgba(255, 215, 0, 0.4); background: linear-gradient(145deg, #fffdf0, #ffffff); }
-    
-    .wild-card-img { width: 100%; height: 220px; object-fit: cover; }
-    .wild-card-content { padding: 20px; }
-    .spot-category { color: #558b2f; font-weight: 700; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 1px; margin-bottom: 5px; display: block; }
-    .spot-title { font-size: 1.5rem; font-weight: 700; color: #1a1a1a; margin-top: 0; margin-bottom: 5px; }
-    .card-title { font-size: 1.5rem; font-weight: 700; color: #1a1a1a; margin-top: 0; margin-bottom: 5px; }
-    .spot-meta { font-size: 0.9rem; color: #666; margin-bottom: 15px; }
-    .spot-pitch { font-size: 1.05rem; line-height: 1.5; color: #333; margin-bottom: 20px; }
-    
-    .tag-pill { display: inline-block; background-color: #e8f5e9; color: #2e7d32; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem; font-weight: 600; margin-right: 6px; margin-bottom: 12px; border: 1px solid #c8e6c9; }
-    
-    .icon-btn-row { display: flex; gap: 15px; margin-bottom: 10px; border-top: 1px solid #eee; padding-top: 15px; }
-    .icon-btn { font-size: 1.6rem; text-decoration: none; transition: transform 0.2s; cursor: pointer; display: inline-block; }
-    .icon-btn:hover { transform: scale(1.15); }
-    
-    @keyframes fadeSlideUp { from {opacity: 0; transform: translateY(20px);} to { opacity: 1; transform: translateY(0); } }
 
-    /* Dark mode: fix form input labels and card titles */
+    /* CARD */
+    .wc-card { background: #ffffff; border-radius: 12px; overflow: hidden; margin: 16px 0 4px 0; box-shadow: 0 2px 12px rgba(0,0,0,0.08); border: 1px solid #e8e8e8; animation: fadeSlideUp 0.5s ease-out forwards; }
+    .wc-special { border: 2px solid #FFD700 !important; box-shadow: 0 0 20px rgba(255,215,0,0.35) !important; }
+
+    .wc-img-wrap { position: relative; width: 100%; height: 200px; overflow: hidden; }
+    .wc-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .wc-tier { position: absolute; bottom: 10px; left: 12px; background: rgba(0,0,0,0.62); color: #fff; font-size: 0.68rem; font-weight: 600; letter-spacing: 0.5px; padding: 4px 10px; border-radius: 20px; text-transform: uppercase; }
+
+    .wc-body { padding: 16px; }
+    .wc-name { font-size: 20px; font-weight: 700; color: #1a1a1a; margin: 0 0 5px 0; line-height: 1.3; }
+    .wc-meta { font-size: 0.78rem; color: #888; margin-bottom: 3px; font-weight: 500; }
+    .wc-address { font-size: 12px; color: #aaa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 12px; }
+    .wc-hr { border: none; border-top: 1px solid #f0f0f0; margin: 12px 0; }
+    .wc-pitch { font-size: 14px; line-height: 1.6; color: #444; margin: 0 0 8px 0; }
+    .wc-tags { margin: 0 0 2px 0; }
+    .wc-tag { display: inline-block; background: #e8f5e9; color: #2e7d32; padding: 3px 10px; border-radius: 12px; font-size: 0.73rem; font-weight: 600; margin: 2px 4px 2px 0; border: 1px solid #c8e6c9; }
+
+    .wc-links { display: flex; gap: 8px; flex-wrap: wrap; }
+    .wc-link-btn { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 8px; border: 1px solid #e0e0e0; font-size: 1.1rem; text-decoration: none; background: #fafafa; transition: background 0.15s, transform 0.15s; cursor: pointer; }
+    .wc-link-btn:hover { background: #f0f0f0; transform: scale(1.08); }
+
+    /* Dark mode */
     @media (prefers-color-scheme: dark) {
         .stTextInput > label, .stSelectbox > label, .stRadio > label,
         .stCheckbox > label, .stTextArea > label, .stMultiSelect > label,
         .stSlider > label, .stNumberInput > label { color: #f0f0f0 !important; }
+        .wc-card { background: #1e1e1e !important; border-color: #333 !important; }
+        .wc-name { color: #f0f0f0 !important; }
+        .wc-meta, .wc-address { color: #999 !important; }
+        .wc-pitch { color: #ccc !important; }
+        .wc-hr { border-color: #333 !important; }
+        .wc-link-btn { background: #2a2a2a !important; border-color: #444 !important; }
+        .wc-link-btn:hover { background: #333 !important; }
+        .wc-tag { background: #1a3320 !important; border-color: #2a5230 !important; }
     }
+
+    @keyframes fadeSlideUp { from {opacity: 0; transform: translateY(20px);} to { opacity: 1; transform: translateY(0); } }
 </style>
 """
 st.markdown(custom_css, unsafe_allow_html=True)
@@ -529,19 +542,14 @@ def match_photos_to_results(recommendations, raw_places):
 
 def render_spot_card(spot, location_input, user_id, index, mode):
     title_prefix = f"{index}." if mode == "top_3" else "🎲"
-    special_class = "get-wild-special" if mode == "get_wild" else ""
+    special_class = "wc-special" if mode == "get_wild" else ""
 
     search_term = spot['name'].replace(' ', '+') + f"+{location_input.replace(' ', '+')}"
     map_url = f"https://www.google.com/maps/search/?api=1&query={search_term}"
     encoded_address = urllib.parse.quote(spot['address'])
     uber_url = f"https://m.uber.com/ul/?action=setPickup&pickup=my_location&dropoff[formatted_address]={encoded_address}"
-    
-    raw_share_text = f"Let's go to {spot['name']}!\n📍 {spot['address']}\n🗺️ {map_url}"
-    encoded_share = urllib.parse.quote(raw_share_text)
-    sms_url = f"sms:?&body={encoded_share}"
-    email_url = f"mailto:?subject={urllib.parse.quote('Wild Plan: ' + spot['name'])}&body={encoded_share}"
-    
-    # Check fields in priority order: category → tier_name → why_its_perfect → name
+
+    # Fallback image (priority: category → tier_name → why_its_perfect → name)
     text_to_check = " ".join([
         (spot.get('name', '') or ''),
         (spot.get('category', '') or ''),
@@ -572,45 +580,55 @@ def render_spot_card(spot, location_input, user_id, index, mode):
         fallback_url = "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80"
 
     img_url = spot.get('photo_url') or fallback_url
-    img_html = f'<img src="{img_url}" class="wild-card-img" alt="">'
-    website_icon = f'<a href="{spot["website"]}" target="_blank" class="icon-btn" title="Visit Website">🌐</a>' if spot.get('website') else ""
 
-    # Generate visual tag pills based on what the AI learned
+    # Tag pills
     tags_html = ""
     matched_tags = spot.get('matched_tags')
     if matched_tags:
         if isinstance(matched_tags, str):
             matched_tags = [t.strip() for t in matched_tags.split(',') if t.strip()]
         for tag in matched_tags:
-            tags_html += f'<span class="tag-pill">✓ {tag}</span>'
+            tags_html += f'<span class="wc-tag">✓ {tag}</span>'
 
-    html_card = f"""
-<div class="wild-card {special_class}">
-{img_html}
-<div class="wild-card-content">
-<span class="spot-category" style="color:#d84315;">{spot.get('tier_name', 'Top Pick')}</span> • <span class="spot-category">{spot.get('category', '')}</span>
-<h2 style="font-size:1.5rem;font-weight:700;margin-top:0;margin-bottom:5px;color:#1a1a1a;">{title_prefix} {spot['name']}</h2>
-<div class="spot-meta">📍 {spot['address']} | ✨ <b>{spot['vibe_check']}</b></div>
-<div>{tags_html}</div>
-<p class="spot-pitch">{spot['why_its_perfect']}</p>
-<div class="icon-btn-row">
-<a href="{map_url}" target="_blank" class="icon-btn" title="View on Maps">🗺️</a>
-{website_icon}
-<a href="{uber_url}" target="_blank" class="icon-btn" title="Ride with Uber">🚗</a>
-<a href="{sms_url}" class="icon-btn" title="Share via Text">💬</a>
-<a href="{email_url}" class="icon-btn" title="Share via Email">✉️</a>
-</div>
-</div>
+    website_btn = f'<a href="{spot["website"]}" target="_blank" class="wc-link-btn" title="Visit Website">🌐</a>' if spot.get('website') else ""
+    tier_name = spot.get('tier_name', 'Top Pick')
+    category  = spot.get('category', '')
+    vibe      = spot.get('vibe_check', '')
+    address   = spot.get('address', '')
+    pitch     = spot.get('why_its_perfect', '')
+
+    html_card = f"""<div class="wc-card {special_class}">
+  <div class="wc-img-wrap">
+    <img src="{img_url}" class="wc-img" alt="">
+    <div class="wc-tier">✦ {tier_name}</div>
+  </div>
+  <div class="wc-body">
+    <div class="wc-name">{title_prefix} {spot['name']}</div>
+    <div class="wc-meta">{category} • ✨ {vibe}</div>
+    <div class="wc-address">📍 {address}</div>
+    <hr class="wc-hr">
+    <p class="wc-pitch">{pitch}</p>
+    <div class="wc-tags">{tags_html}</div>
+    <hr class="wc-hr">
+    <div class="wc-links">
+      <a href="{map_url}" target="_blank" class="wc-link-btn" title="View on Maps">🗺️</a>
+      {website_btn}
+      <a href="{uber_url}" target="_blank" class="wc-link-btn" title="Uber">🚗</a>
+    </div>
+  </div>
 </div>
 """
     st.markdown(html_card, unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns([1, 1, 2])
+
+    col1, col2, col3 = st.columns(3)
     with col1:
-        if st.button("🔖 Save to List", key=f"save_{index}_{spot['name']}"):
+        if st.button("⭐ Save", key=f"save_{index}_{spot['name']}", use_container_width=True, help="Save for later"):
             save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'))
     with col2:
-        if st.button("🚫 Not for me", key=f"hate_{index}_{spot['name']}"):
+        if st.button("✅ I'm Going", key=f"going_{index}_{spot['name']}", use_container_width=True, type="primary", help="Mark as chosen"):
+            save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'), notes="chosen")
+    with col3:
+        if st.button("👎 Not for me", key=f"nope_{index}_{spot['name']}", use_container_width=True, help="Never suggest this again"):
             save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'), rating=1, notes="Blacklisted via quick-button.")
 
 # ==========================================
@@ -882,7 +900,9 @@ else:
                 for i, spot in enumerate(results.get("recommendations", [])):
                     if spot.get('lat') and spot.get('lng'):
                         display_name = f"{i+1}. {spot['name']}" if mode == "top_3" else f"🎲 {spot['name']}"
-                        map_data.append({"lat": spot['lat'], "lon": spot['lng'], "name": display_name})
+                        spot_search = urllib.parse.quote(f"{spot['name']} {st.session_state.mem_loc}")
+                        spot_map_url = f"https://www.google.com/maps/search/?api=1&query={spot_search}"
+                        map_data.append({"lat": spot['lat'], "lon": spot['lng'], "name": display_name, "map_url": spot_map_url})
                 
                 if map_data:
                     with st.expander("🗺️ View on Map"):
@@ -895,7 +915,7 @@ else:
                             pickable=True,
                         )
                         view_state = pdk.ViewState(latitude=map_data[0]['lat'], longitude=map_data[0]['lon'], zoom=12)
-                        st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip={"html": "<b>{name}</b>"}))
+                        st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip={"html": "<b>{name}</b><br><a href='{map_url}' target='_blank' style='color:#90caf9;'>📍 Open in Maps</a>"}))
                 
                 # --- RENDER CARDS ---
                 wild_count = get_wild_count_today()
@@ -966,6 +986,31 @@ else:
         if not saved_spots:
             st.info("You haven't saved any spots yet. Go explore!")
         else:
+            # Rating nudge for spots marked "I'm Going" but not yet rated
+            try:
+                cutoff = (datetime.utcnow() - timedelta(hours=12)).isoformat()
+                nudge_res = supabase.table('saved_spots').select('*')\
+                    .eq('user_id', st.session_state.user.id)\
+                    .eq('user_notes', 'chosen')\
+                    .is_('rating', 'null')\
+                    .lt('saved_at', cutoff)\
+                    .execute()
+                nudge_spots = nudge_res.data if nudge_res.data else []
+            except:
+                nudge_spots = []
+            for nudge in nudge_spots:
+                st.markdown(
+                    f'<div style="border:2px solid #FFD700;border-radius:10px;padding:14px;background:#fffde7;margin-bottom:12px;">'
+                    f'⭐ <b>How was your visit to {nudge["spot_name"]}?</b> Rate it below.</div>',
+                    unsafe_allow_html=True
+                )
+                with st.form(f"nudge_rate_{nudge['id']}"):
+                    nudge_rating = st.slider("Your rating (1-5)", 1, 5, 3)
+                    if st.form_submit_button("Submit Rating", type="primary"):
+                        supabase.table('saved_spots').update({'rating': nudge_rating}).eq('id', nudge['id']).execute()
+                        st.success("Thanks for the rating!")
+                        st.rerun()
+
             for saved in saved_spots:
                 icon = "🚫" if saved['rating'] == 1 else "📍"
                 with st.expander(f"{icon} {saved['spot_name']}"):
