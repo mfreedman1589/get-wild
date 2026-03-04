@@ -379,12 +379,19 @@ def get_live_weather(lat, lng):
     return "Weather data unavailable."
 
 def build_semantic_query(filters_dict, profile):
-    modifiers = []
-    
-    # Highest priority: The Specific Keyword
-    if filters_dict.get('specific'):
-        modifiers.append(filters_dict['specific'])
+    specific = (filters_dict.get('specific') or "").strip()
 
+    # If specific keyword provided, it drives the query — base vibe/food is a secondary context hint
+    if specific:
+        group = filters_dict.get('group', '')
+        loc_hint = ""
+        if group == "Date": loc_hint = "intimate"
+        elif group == "Family Outing": loc_hint = "family-friendly"
+        elif group == "Friends": loc_hint = "lively"
+        parts = [f"{specific} venues", f"{specific} bars" if "bar" not in specific.lower() else "", loc_hint]
+        return " ".join(p for p in parts if p).strip()
+
+    modifiers = []
     if profile:
         if profile.get('needs_dog_friendly') and filters_dict['vibe'] == "Outside": modifiers.append("dog-friendly")
         if profile.get('vibe_preference'): modifiers.append(profile.get('vibe_preference'))
@@ -394,7 +401,7 @@ def build_semantic_query(filters_dict, profile):
     elif filters_dict['group'] == "Friends": modifiers.append("lively")
 
     modifier_str = " ".join(modifiers)
-    
+
     # Always keep a strong base category so Google doesn't return random offices/services
     no_food = filters_dict['food'] == "No Food Needed"
     if filters_dict['vibe'] == "Outside":
@@ -685,20 +692,72 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
 {tier_lines}
         """
 
-    if filters_dict.get('vibe') == "Outside":
-        weather_rule = "4. WEATHER: If RAIN, SNOW, or under 45°F → prefer indoor or heated-patio venues."
+    _vibe = filters_dict.get('vibe', '')
+    _wr = (weather_report or "").lower()
+    _bad_weather = any(w in _wr for w in ("rain", "snow", "storm")) or any(
+        f"{t}°f" in _wr for t in range(0, 45)
+    ) or ("°f" in _wr and any(
+        int(tok.replace("°f", "")) < 45
+        for tok in _wr.split()
+        if tok.replace("°f", "").lstrip("-").isdigit()
+    ))
+    if _vibe == "Inside":
+        weather_rule = "4. WEATHER: User wants indoors — no weather restrictions apply."
+    elif _vibe == "Outside" and _bad_weather:
+        weather_rule = (
+            f"4. WEATHER ALERT: {weather_report}. User selected Outside but conditions are poor. "
+            "Strongly prefer indoor or covered venues. Outdoor-only venues (beer gardens, rooftop bars, "
+            "open patios, parks) are only acceptable if they have substantial permanent indoor space."
+        )
+    elif _bad_weather:
+        weather_rule = (
+            f"4. WEATHER ALERT: {weather_report}. Avoid recommending outdoor-only venues "
+            "(beer gardens, rooftop bars, outdoor patios, parks) unless they have substantial indoor space. "
+            "Prioritize covered or indoor venues."
+        )
     else:
-        weather_rule = "4. WEATHER: No weather restrictions (user wants indoor or is flexible)."
+        weather_rule = f"4. WEATHER: {weather_report}. No weather restrictions."
+
+    _group = filters_dict.get('group', '')
+    if _group == "Friends":
+        group_rule = (
+            "GROUP RULE: This is a group of FRIENDS. "
+            "NEVER recommend intimate, romantic, or date-focused venues (quiet wine bars for two, candlelit dinners, etc.). "
+            "Prioritize lively, social, group-friendly spots with energy and a fun atmosphere."
+        )
+    elif _group == "Date":
+        group_rule = (
+            "GROUP RULE: This is a DATE. "
+            "NEVER recommend loud sports bars, group party venues, or high-energy crowd spots. "
+            "Prioritize intimate, impressive, conversation-friendly venues."
+        )
+    elif _group == "Family Outing":
+        group_rule = (
+            "GROUP RULE: This is a FAMILY OUTING. "
+            "NEVER recommend bars, nightclubs, or adult-only venues. "
+            "All results must be welcoming to children."
+        )
+    elif _group == "Solo":
+        group_rule = (
+            "GROUP RULE: This is a SOLO outing. "
+            "Prioritize places comfortable for one person — bars with good atmosphere, museums, "
+            "coffee shops, solo-friendly dining. Avoid venues that feel awkward alone."
+        )
+    else:
+        group_rule = ""
 
     specific_rule = ""
     if filters_dict.get('specific'):
-        specific_rule = f"""7. SPECIFIC REQUEST — HARD FILTER ON ALL RESULTS: '{filters_dict['specific']}'
-    Applies to every recommendation, not just one. Honor literal and conceptual meaning:
+        _spec = filters_dict['specific']
+        specific_rule = f"""8. MANDATORY OVERRIDE — SPECIFIC REQUEST: '{_spec}'
+    This is NON-NEGOTIABLE. ALL 3 recommendations MUST directly relate to '{_spec}'.
+    If the Google Places data doesn't have enough relevant results, use the closest matches available
+    and explain the connection in why_its_perfect.
+    The matched_tags array MUST contain the exact keyword '{_spec}'.
     - "happy hour" → bars/restaurants with happy hour specials; mention deals/times in why_its_perfect
     - "live music" → confirmed live music venues only
     - "romantic" → intimate, quiet, date-appropriate only
-    matched_tags MUST be populated with 1-3 keywords from this request (never leave empty).
-    If no data genuinely matches, say so honestly — don't force irrelevant results."""
+    Do NOT return results that ignore this keyword."""
 
     # Geography rule
     geo_center = f"{location_name}{f' (lat={lat:.4f}, lng={lng:.4f})' if lat and lng else ''}"
@@ -747,6 +806,7 @@ RULES:
 {weather_rule}
 5. NO HALLUCINATION: Use exact addresses and URLs from input data. Never invent.
 6. VARIETY: Do not return 3 events, 3 of the same venue type, or 3 of the same category. Google Places results must provide the backbone of variety.
+{f"7. {group_rule}" if group_rule else ""}
 {specific_rule}
 
 {instruction}
