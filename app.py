@@ -144,6 +144,7 @@ if 'fetch_timed_out' not in st.session_state: st.session_state.fetch_timed_out =
 if 'skip_cache' not in st.session_state: st.session_state.skip_cache = False
 if 'show_onboarding' not in st.session_state: st.session_state.show_onboarding = False
 if 'wild_idea_dismissed' not in st.session_state: st.session_state.wild_idea_dismissed = False
+if 'show_welcome_bonus' not in st.session_state: st.session_state.show_welcome_bonus = False
 if 'referral_code' not in st.session_state:
     st.session_state.referral_code = st.query_params.get("ref", "")
 
@@ -1207,12 +1208,12 @@ if st.session_state.user is None:
                             supabase.table('user_profiles').upsert(
                                 {'id': new_user.id, 'referred_by': _ref}
                             ).execute()
-                            _ref_res = supabase.table('user_profiles').select('id').eq('referral_code', _ref).execute()
-                            if _ref_res.data:
-                                _referrer_id = _ref_res.data[0]['id']
-                                award_points(_referrer_id, 'referral', 10, 'Friend signed up using your invite link')
+                            supabase.rpc('award_referral_points', {
+                                'p_referral_code': _ref,
+                                'p_new_user_id': str(new_user.id),
+                            }).execute()
                             award_points(new_user.id, 'signup_bonus', 5, 'Joined via friend invite')
-                            st.success("🎉 Welcome bonus! You got 5 Wild Points for joining via invite!")
+                            st.session_state.show_welcome_bonus = True
                         except:
                             pass
                     st.session_state.show_onboarding = True
@@ -1260,6 +1261,10 @@ elif st.session_state.show_onboarding:
         st.rerun()
 
 else:
+    if st.session_state.get('show_welcome_bonus'):
+        st.success("🎉 Welcome bonus! You got 5 Wild Points for joining via invite!")
+        st.session_state.show_welcome_bonus = False
+
     tab_explore, tab_profile, tab_saved = st.tabs(["🌍 Explore", "👤 My Profile", "⭐ Saved Spots"])
 
     with tab_explore:
@@ -1635,7 +1640,7 @@ else:
             with _ic2:
                 st.link_button("📧 Email a Friend", _email_link, use_container_width=True)
             try:
-                _invited_count = len(supabase.table('user_profiles').select('id').eq('referred_by', _my_code).execute().data or [])
+                _invited_count = supabase.rpc('get_referral_count', {'p_referral_code': _my_code}).execute().data or 0
             except:
                 _invited_count = 0
             st.caption(f"👥 Friends invited: {_invited_count}")
