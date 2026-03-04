@@ -144,6 +144,8 @@ if 'fetch_timed_out' not in st.session_state: st.session_state.fetch_timed_out =
 if 'skip_cache' not in st.session_state: st.session_state.skip_cache = False
 if 'show_onboarding' not in st.session_state: st.session_state.show_onboarding = False
 if 'wild_idea_dismissed' not in st.session_state: st.session_state.wild_idea_dismissed = False
+if 'referral_code' not in st.session_state:
+    st.session_state.referral_code = st.query_params.get("ref", "")
 
 # Persistent memory state variables
 if 'mem_loc' not in st.session_state: st.session_state.mem_loc = ""
@@ -175,6 +177,19 @@ def get_favorite_spots(user_id):
         res = supabase.table('saved_spots').select('spot_name, category').eq('user_id', user_id).gte('rating', 4).execute()
         return [f"{spot['spot_name']} ({spot['category']})" for spot in res.data] if res.data else []
     except: return []
+
+def generate_referral_code(user_id):
+    """Returns the user's referral code, generating and saving one if needed."""
+    try:
+        res = supabase.table('user_profiles').select('referral_code').eq('id', user_id).execute()
+        if res.data and res.data[0].get('referral_code'):
+            return res.data[0]['referral_code']
+        import hashlib
+        code = hashlib.md5(f"{user_id}getwild".encode()).hexdigest()[:8].upper()
+        supabase.table('user_profiles').upsert({'id': user_id, 'referral_code': code}).execute()
+        return code
+    except:
+        return None
 
 def get_user_preference_scores(user_id):
     """Returns learned taste profile from saved/rated spots."""
@@ -1168,6 +1183,7 @@ if st.session_state.user is None:
                 try:
                     res = supabase.auth.sign_in_with_password({"email": email_login, "password": password_login})
                     st.session_state.user = res.user
+                    generate_referral_code(res.user.id)
                     prof = get_profile(res.user.id)
                     if not prof or not prof.get('first_name'):
                         st.session_state.show_onboarding = True
@@ -1181,7 +1197,24 @@ if st.session_state.user is None:
             if st.form_submit_button("Sign Up", type="primary", use_container_width=True):
                 try:
                     res = supabase.auth.sign_up({"email": email_signup, "password": password_signup})
-                    st.session_state.user = res.user
+                    new_user = res.user
+                    st.session_state.user = new_user
+                    generate_referral_code(new_user.id)
+                    # Process referral if the user arrived via an invite link
+                    _ref = st.session_state.get('referral_code', '').strip()
+                    if _ref:
+                        try:
+                            supabase.table('user_profiles').upsert(
+                                {'id': new_user.id, 'referred_by': _ref}
+                            ).execute()
+                            _ref_res = supabase.table('user_profiles').select('id').eq('referral_code', _ref).execute()
+                            if _ref_res.data:
+                                _referrer_id = _ref_res.data[0]['id']
+                                award_points(_referrer_id, 'referral', 10, 'Friend signed up using your invite link')
+                            award_points(new_user.id, 'signup_bonus', 5, 'Joined via friend invite')
+                            st.success("🎉 Welcome bonus! You got 5 Wild Points for joining via invite!")
+                        except:
+                            pass
                     st.session_state.show_onboarding = True
                     st.rerun()
                 except Exception as e: st.error(f"Signup failed: {e}")
@@ -1571,6 +1604,8 @@ else:
 - **Save a spot** ⭐ → +1 pt
 - **Choose an outing** (I'm Going) ✅ → +5 pts
 - **Rate a visit 4-5 stars** → +1 pt
+- **Invite a friend** 🌿 → +10 pts when they sign up
+- **Join via invite** → +5 pts signup bonus
 - **Explorer** 🧭 — First saved spot → +5 bonus pts
 - **Trailblazer** 🥾 — 5 saves across different categories → +10 bonus pts
 - **Wild at Heart** 💚 — 10 chosen outings → +25 bonus pts
@@ -1578,6 +1613,32 @@ else:
 - **Night Owl** 🦉 — 3 bar/lounge/brewery spots saved → +10 bonus pts
 - **Hidden Gem Hunter** 💎 — 5 Hidden Gem tier spots → +20 bonus pts
             """)
+
+        st.write("---")
+        st.subheader("🌿 Invite Friends")
+        st.caption("Earn 10 points for every friend who joins Get Wild")
+        _my_code = generate_referral_code(st.session_state.user.id)
+        if _my_code:
+            try:
+                _base_url = st.query_params.get("_stcore_base_url", "https://getwild.streamlit.app")
+            except:
+                _base_url = "https://getwild.streamlit.app"
+            _invite_link = f"{_base_url}?ref={_my_code}"
+            st.text_input("Your invite link", value=_invite_link, disabled=True, label_visibility="collapsed")
+            _msg = f"Hey! Check out Get Wild — it finds the best local spots and experiences. Use my link to join and we both get bonus points! {_invite_link}"
+            import urllib.parse
+            _sms_link = f"sms:?body={urllib.parse.quote(_msg)}"
+            _email_link = f"mailto:?subject={urllib.parse.quote('Join me on Get Wild!')}&body={urllib.parse.quote(_msg)}"
+            _ic1, _ic2 = st.columns(2)
+            with _ic1:
+                st.link_button("📱 Text a Friend", _sms_link, use_container_width=True)
+            with _ic2:
+                st.link_button("📧 Email a Friend", _email_link, use_container_width=True)
+            try:
+                _invited_count = len(supabase.table('user_profiles').select('id').eq('referred_by', _my_code).execute().data or [])
+            except:
+                _invited_count = 0
+            st.caption(f"👥 Friends invited: {_invited_count}")
 
         st.write("---")
         st.subheader("Personalize Your Profile")
