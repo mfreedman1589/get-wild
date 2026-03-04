@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from dateutil import parser as dateutil_parser
 from streamlit_geolocation import streamlit_geolocation
 from supabase import create_client, Client
-from tenacity import retry, wait_exponential, stop_after_attempt
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_not_exception_type
 
 # ==========================================
 # 1. CONFIGURATION & SECRETS
@@ -359,7 +359,7 @@ def fetch_live_events(location_name, intended_time, group_type, target_date_str,
     except:
         return []
 
-@retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3))
+@retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3), retry=retry_if_not_exception_type(TimeoutError))
 def get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_name, target_date_str, relative_day, profile, excluded_spots, favorite_spots, mode="top_3"):
     client = OpenAI(api_key=OPENAI_API_KEY)
     
@@ -393,65 +393,50 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
         """
 
     if filters_dict.get('vibe') == "Outside":
-        weather_rule = "3. WEATHER PIVOT: If weather report indicates RAIN, SNOW, or TEMP < 45°F, prioritize indoor venues or those with heated patios."
+        weather_rule = "3. WEATHER: If RAIN, SNOW, or under 45°F → prefer indoor or heated-patio venues."
     else:
-        weather_rule = "3. WEATHER: Do not restrict recommendations or warn the user about weather, as the user is open to indoor venues or specifically requested them."
+        weather_rule = "3. WEATHER: No weather restrictions (user wants indoor or is flexible)."
 
     specific_rule = ""
     if filters_dict.get('specific'):
-        specific_rule = f"""5. MANDATORY SPECIFIC REQUIREMENT — NON-NEGOTIABLE:
-    The user explicitly requested: '{filters_dict['specific']}'
-    This is not a soft preference. It is a hard filter that applies to EVERY SINGLE recommendation, not just one.
+        specific_rule = f"""5. SPECIFIC REQUEST — HARD FILTER ON ALL RESULTS: '{filters_dict['specific']}'
+    Applies to every recommendation, not just one. Honor literal and conceptual meaning:
+    - "happy hour" → bars/restaurants with happy hour specials; mention deals/times in why_its_perfect
+    - "live music" → confirmed live music venues only
+    - "romantic" → intimate, quiet, date-appropriate only
+    matched_tags MUST be populated with 1-3 keywords from this request (never leave empty).
+    If no data genuinely matches, say so honestly — don't force irrelevant results."""
 
-    HOW TO HONOR CONCEPTUAL AND TIME-BASED REQUESTS:
-    - "happy hour" → EVERY result must be a bar or restaurant with known happy hour specials. Mention the happy hour explicitly in why_its_perfect (e.g. deals, times, drink specials). Do NOT recommend a coffee shop or park.
-    - "live music" → EVERY result must be a venue with live music. Do not recommend a restaurant that "sometimes has music." Only confirmed live music venues.
-    - "romantic" → EVERY result must have intimate lighting, a quiet atmosphere, and be date-appropriate. No loud sports bars or group-oriented venues.
-    - Apply this same logic to any other keyword: honor the spirit AND the literal meaning of what was asked.
+    system_prompt = f"""You are a local concierge for 'Get Wild'.
 
-    MATCHED_TAGS IS MANDATORY: When a specific request is provided, you MUST always populate 'matched_tags' with the 1-3 most important keywords extracted from the request. Leaving matched_tags empty when a specific was given is an error.
+CONTEXT: {location_name} | {weather_report} | {target_date_str} ({relative_day}) | {filters_dict['time']} | {filters_dict['group']}, {filters_dict['food']}, {filters_dict['vibe']}
+{profile_context}{blacklist_context}
+RULES:
+1. GEOGRAPHY: All picks within 20 miles of {location_name}. Discard anything outside.
+2. EVENTS: Only use events with date_verified=True on {relative_day} ({target_date_str}). why_its_perfect must include venue name and address. If no verified events exist, use Places data only — never fabricate event details.
+{weather_rule}
+4. NO HALLUCINATION: Use exact addresses and URLs from input data. Never invent.
+{specific_rule}
 
-    HONESTY FALLBACK: If the Places data does not contain venues that genuinely match the specific request, say so honestly in why_its_perfect rather than forcing irrelevant recommendations. You may suggest the user try a different search."""
+{instruction}
 
-    system_prompt = f"""
-    You are a luxury local concierge for an app called 'Get Wild'.
-    
-    CRITICAL CONTEXT:
-    - Target Location: {location_name}
-    - CURRENT WEATHER: {weather_report}
-    - TARGET EVENT DATE: {target_date_str} ({relative_day})
-    - User Intended Time: {filters_dict['time']}
-    - Session Profile: {filters_dict['group']} looking for {filters_dict['food']} in a {filters_dict['vibe']} setting.
-    {profile_context}
-    {blacklist_context}
-    
-    GEOGRAPHY, WEATHER & EVENT SHACKLES:
-    1. SUPER STRICT GEOGRAPHY: EVERY recommendation MUST be physically located in or within 20 miles of {location_name}. Discard any web events outside this immediate area.
-    2. STRICT EVENT DETAILS: If recommending a live event, verify it is happening {relative_day} ({target_date_str}). The 'why_its_perfect' field MUST start with the exact time and venue.
-    {weather_rule}
-    4. ANTI-HALLUCINATION (CRITICAL): DO NOT guess addresses. You MUST use the EXACT 'formattedAddress' and 'websiteUri' provided in the Google Places JSON or the Web Search data.
-    {specific_rule}
+Return JSON with a 'recommendations' array. Each item: name, tier_name, category, address (exact), why_its_perfect (2-3 sentences), vibe_check (3 words), matched_tags (2-3 strings; mandatory if specific given), website, photo_ref, lat, lng."""
 
-    STRICT EVENT EVALUATION RULES:
-    5. DATE GATING: ONLY use events where date_verified=True. Completely discard any event with date_verified=False — do not mention or recommend them.
-    6. EVENT VENUE MANDATE: When recommending any live event, the 'why_its_perfect' field MUST include the venue name AND full venue address extracted from the event data or snippet.
-    7. NO-EVENTS FALLBACK: If zero events have date_verified=True, do NOT fabricate event details. Fall back exclusively to Google Places data for all recommendations.
-    
-    {instruction}
-    
-    Return STRICTLY as a JSON object with a 'recommendations' array containing:
-    'name', 'tier_name' (e.g., The Crowd-Pleaser), 'category', 'address' (Exact from data), 'why_its_perfect' (2-3 sentences), 'vibe_check' (3 words), 'matched_tags' (Array of 2-3 strings highlighting the specific keywords you honored, e.g., ["Romantic", "Good Wine"]. Leave empty if no specific keyword was given.), 'website' (URL if available), 'photo_ref' (String from places.photos[0].name if available), 'lat' (float), and 'lng' (float).
-    """
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        response_format={ "type": "json_object" },
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"GOOGLE PLACES DATA: {json.dumps(trimmed_places)}\n\nLIVE WEB SEARCH EVENTS:\n{json.dumps(safe_events_data) if isinstance(safe_events_data, list) else safe_events_data}"}
-        ],
-        max_tokens=2500 
-    )
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            response_format={ "type": "json_object" },
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"GOOGLE PLACES DATA: {json.dumps(trimmed_places)}\n\nLIVE WEB SEARCH EVENTS:\n{json.dumps(safe_events_data) if isinstance(safe_events_data, list) else safe_events_data}"}
+            ],
+            max_tokens=2500,
+            timeout=30
+        )
+    except Exception as e:
+        if "timeout" in type(e).__name__.lower() or "timeout" in str(e).lower():
+            raise TimeoutError("Taking longer than usual, please try again")
+        raise
     
     raw_content = response.choices[0].message.content.strip()
     if raw_content.startswith("```json"):
@@ -530,14 +515,6 @@ def render_spot_card(spot, location_input, user_id, index, mode):
 # 5. ASYNC DATA GATHERER
 # ==========================================
 async def gather_all_data(lat, lng, semantic_query, distance, location_input, intended_time, group_type, target_date_str, relative_day, user_id):
-    _t0 = time.time()
-    _timings = {}
-
-    async def _timed(label, coro):
-        result = await coro
-        _timings[label] = round(time.time() - _t0, 2)
-        return result
-
     async def _events_with_timeout():
         try:
             return await asyncio.wait_for(
@@ -547,13 +524,11 @@ async def gather_all_data(lat, lng, semantic_query, distance, location_input, in
         except (asyncio.TimeoutError, Exception):
             return []
 
-    weather_task   = _timed("weather",   asyncio.to_thread(get_live_weather, lat, lng))
-    places_task    = _timed("places",    asyncio.to_thread(fetch_places_semantic, semantic_query, lat, lng, distance))
-    events_task    = _timed("events",    _events_with_timeout())
-    excluded_task  = _timed("excluded",  asyncio.to_thread(get_excluded_spots, user_id))
-    favorites_task = _timed("favorites", asyncio.to_thread(get_favorite_spots, user_id))
-    results = await asyncio.gather(weather_task, places_task, events_task, excluded_task, favorites_task)
-    return (*results, _timings)
+    weather_task   = asyncio.to_thread(get_live_weather, lat, lng)
+    places_task    = asyncio.to_thread(fetch_places_semantic, semantic_query, lat, lng, distance)
+    excluded_task  = asyncio.to_thread(get_excluded_spots, user_id)
+    favorites_task = asyncio.to_thread(get_favorite_spots, user_id)
+    return await asyncio.gather(weather_task, places_task, _events_with_timeout(), excluded_task, favorites_task)
 
 # ==========================================
 # 6. UI ROUTING
@@ -705,18 +680,13 @@ else:
                     if st.session_state.mem_gps_active and st.session_state.mem_geo_data:
                         lat, lng = st.session_state.mem_geo_data['latitude'], st.session_state.mem_geo_data['longitude']
                         location_context = "exact GPS coordinates"
-                        st.write("⏱ get_coordinates: skipped (GPS)")
                     else:
-                        _t = time.time()
                         lat, lng = get_coordinates(st.session_state.mem_loc)
-                        st.write(f"⏱ get_coordinates: {round(time.time()-_t,2)}s")
 
                     if lat is None:
                         status_loader.error("Couldn't find that location.")
                     else:
-                        _t = time.time()
                         target_date_str, relative_day = get_local_target_date(lat, lng, st.session_state.mem_day)
-                        st.write(f"⏱ get_local_target_date: {round(time.time()-_t,2)}s (cached→near-zero expected)")
                         semantic_query = build_semantic_query(st.session_state.filters_dict, user_profile)
 
                         status_loader.info("☁️ Curating local weather, places, and events...")
@@ -726,15 +696,12 @@ else:
                                 st.session_state.filters_dict['time'], st.session_state.filters_dict['group'],
                                 target_date_str, relative_day, st.session_state.user.id
                             )
-                        _t = time.time()
                         try:
-                            weather_report, raw_places, live_events_data, db_excluded, user_favorites, _gather_timings = asyncio.run(_run_gather())
+                            weather_report, raw_places, live_events_data, db_excluded, user_favorites = asyncio.run(_run_gather())
                         except RuntimeError:
                             import nest_asyncio
                             nest_asyncio.apply()
-                            weather_report, raw_places, live_events_data, db_excluded, user_favorites, _gather_timings = asyncio.run(_run_gather())
-                        st.write(f"⏱ asyncio.gather total: {round(time.time()-_t,2)}s")
-                        st.write(f"⏱ task finish times (s after gather start): {_gather_timings}")
+                            weather_report, raw_places, live_events_data, db_excluded, user_favorites = asyncio.run(_run_gather())
 
                         if st.session_state.current_mode == "get_wild":
                             status_loader.info("🎲 Loading up your adventure and revealing the spontaneity...")
@@ -749,7 +716,6 @@ else:
                             target_date_str, st.session_state.current_mode
                         )
                         cached_result = None
-                        _t = time.time()
                         try:
                             cutoff = (datetime.utcnow() - timedelta(hours=2)).isoformat()
                             rows = supabase.table('recommendation_cache').select('result_json').eq('cache_key', cache_key).gte('created_at', cutoff).limit(1).execute()
@@ -757,12 +723,9 @@ else:
                                 cached_result = json.loads(rows.data[0]['result_json'])
                         except:
                             pass
-                        st.write(f"⏱ cache lookup: {round(time.time()-_t,2)}s — {'HIT' if cached_result else 'MISS'}")
 
-                        _t = time.time()
                         if cached_result:
                             st.session_state.current_results = cached_result
-                            st.write("⏱ get_ai_recommendations: skipped (cache hit)")
                         else:
                             st.session_state.current_results = get_ai_recommendations(
                                 raw_places, live_events_data, weather_report,
@@ -770,7 +733,6 @@ else:
                                 target_date_str, relative_day, user_profile, all_excluded,
                                 user_favorites, mode=st.session_state.current_mode
                             )
-                            st.write(f"⏱ get_ai_recommendations: {round(time.time()-_t,2)}s")
                             try:
                                 supabase.table('recommendation_cache').insert({
                                     'cache_key': cache_key,
@@ -787,9 +749,11 @@ else:
                             status_loader.success("✅ Adventure Ready!")
                         else:
                             status_loader.success("✅ Itinerary Ready!")
-                except Exception as e: 
-                    error_type = type(e).__name__
-                    status_loader.error(f"Error connecting to the wild. Try again! ({error_type})")
+                except Exception as e:
+                    if isinstance(e, TimeoutError):
+                        status_loader.error("Taking longer than usual, please try again.")
+                    else:
+                        status_loader.error(f"Error connecting to the wild. Try again! ({type(e).__name__})")
 
             if st.session_state.current_results:
                 st.write("---")
