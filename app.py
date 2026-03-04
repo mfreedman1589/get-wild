@@ -4,6 +4,7 @@ import streamlit.components.v1 as components
 import requests
 import json
 import urllib.parse
+import asyncio
 import concurrent.futures
 import pandas as pd
 import pydeck as pdk
@@ -514,32 +515,15 @@ def render_spot_card(spot, location_input, user_id, index, mode):
             save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'), rating=1, notes="Blacklisted via quick-button.")
 
 # ==========================================
-# 5. PARALLEL DATA GATHERER
+# 5. ASYNC DATA GATHERER
 # ==========================================
-def gather_all_data(lat, lng, semantic_query, distance, location_input, intended_time, group_type, target_date_str, relative_day, user_id):
-    tasks = {
-        "weather":  (get_live_weather,        (lat, lng)),
-        "places":   (fetch_places_semantic,   (semantic_query, lat, lng, distance)),
-        "events":   (fetch_live_events,       (location_input or "nearby", intended_time, group_type, target_date_str, relative_day, lat, lng)),
-        "excluded": (get_excluded_spots,      (user_id,)),
-        "favorites":(get_favorite_spots,      (user_id,)),
-    }
-    results = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
-        futures = {ex.submit(fn, *args): key for key, (fn, args) in tasks.items()}
-        for future in concurrent.futures.as_completed(futures):
-            key = futures[future]
-            try:
-                results[key] = future.result()
-            except:
-                results[key] = None
-    return (
-        results["weather"],
-        results["places"],
-        results["events"],
-        results["excluded"],
-        results["favorites"],
-    )
+async def gather_all_data(lat, lng, semantic_query, distance, location_input, intended_time, group_type, target_date_str, relative_day, user_id):
+    weather_task  = asyncio.to_thread(get_live_weather, lat, lng)
+    places_task   = asyncio.to_thread(fetch_places_semantic, semantic_query, lat, lng, distance)
+    events_task   = asyncio.to_thread(fetch_live_events, location_input or "nearby", intended_time, group_type, target_date_str, relative_day, lat, lng)
+    excluded_task = asyncio.to_thread(get_excluded_spots, user_id)
+    favorites_task = asyncio.to_thread(get_favorite_spots, user_id)
+    return await asyncio.gather(weather_task, places_task, events_task, excluded_task, favorites_task)
 
 # ==========================================
 # 6. UI ROUTING
@@ -701,11 +685,18 @@ else:
                         semantic_query = build_semantic_query(st.session_state.filters_dict, user_profile)
                         
                         status_loader.info("☁️ Curating local weather, places, and events...")
-                        weather_report, raw_places, live_events_data, db_excluded, user_favorites = gather_all_data(
-                            lat, lng, semantic_query, st.session_state.mem_dist, location_context,
-                            st.session_state.filters_dict['time'], st.session_state.filters_dict['group'],
-                            target_date_str, relative_day, st.session_state.user.id
-                        )
+                        def _run_gather():
+                            return gather_all_data(
+                                lat, lng, semantic_query, st.session_state.mem_dist, location_context,
+                                st.session_state.filters_dict['time'], st.session_state.filters_dict['group'],
+                                target_date_str, relative_day, st.session_state.user.id
+                            )
+                        try:
+                            weather_report, raw_places, live_events_data, db_excluded, user_favorites = asyncio.run(_run_gather())
+                        except RuntimeError:
+                            import nest_asyncio
+                            nest_asyncio.apply()
+                            weather_report, raw_places, live_events_data, db_excluded, user_favorites = asyncio.run(_run_gather())
 
                         if st.session_state.current_mode == "get_wild":
                             status_loader.info("🎲 Loading up your adventure and revealing the spontaneity...")
