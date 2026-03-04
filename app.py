@@ -806,11 +806,13 @@ with _fb_col:
         st.text_area("", placeholder="Type here...", label_visibility="collapsed", key="fb_textarea")
         if st.button("Send Feedback", type="primary", use_container_width=True, key="fb_submit"):
             _fb_comment = st.session_state.get("fb_textarea", "")
-            st.write(f"DEBUG comment value: '{_fb_comment}'")
-            if submit_feedback(_fb_user_id, _fb_comment):
-                st.toast("✅ Feedback sent! Thank you.")
+            if not _fb_comment.strip():
+                st.warning("Please write something before sending.")
             else:
-                st.error("Please write something before sending.")
+                if submit_feedback(_fb_user_id, _fb_comment):
+                    st.toast("✅ Feedback sent! Thank you.")
+                else:
+                    st.error("Something went wrong saving your feedback. Please try again.")
 
 if st.session_state.user is None:
     st.write("---")
