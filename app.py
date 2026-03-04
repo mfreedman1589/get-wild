@@ -390,25 +390,64 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
     except: pass
     return []
 
-def fetch_live_events(lat, lng, radius_miles, target_date_str):
+_TM_CLASSIFICATION_MAP = {
+    "music":           ("music",        None),
+    "live music":      ("music",        None),
+    "concert":         ("music",        None),
+    "band":            ("music",        None),
+    "sports":          ("sports",       None),
+    "game":            ("sports",       None),
+    "basketball":      ("sports",       None),
+    "football":        ("sports",       None),
+    "baseball":        ("sports",       None),
+    "hockey":          ("sports",       None),
+    "soccer":          ("sports",       None),
+    "comedy":          ("arts & theatre", "comedy"),
+    "stand-up":        ("arts & theatre", "comedy"),
+    "stand up":        ("arts & theatre", "comedy"),
+    "comedian":        ("arts & theatre", "comedy"),
+    "theater":         ("arts & theatre", None),
+    "theatre":         ("arts & theatre", None),
+    "broadway":        ("arts & theatre", None),
+    "show":            ("arts & theatre", None),
+    "play":            ("arts & theatre", None),
+    "family":          ("family",       None),
+    "kids":            ("family",       None),
+    "festival":        ("music",        "festival"),
+    "outdoor concert": ("music",        "festival"),
+}
+
+def fetch_live_events(lat, lng, radius_miles, target_date_str, specific_keyword=""):
     try:
         target_date = datetime.strptime(target_date_str, "%A, %B %d, %Y").date()
         start_dt = f"{target_date.isoformat()}T00:00:00Z"
         end_dt   = f"{(target_date + timedelta(days=1)).isoformat()}T00:00:00Z"
 
+        kw_lower = (specific_keyword or "").lower().strip()
+        classification, extra_keyword = _TM_CLASSIFICATION_MAP.get(kw_lower, (None, None))
+
+        params = {
+            "apikey":        TICKETMASTER_API_KEY,
+            "latlong":       f"{lat},{lng}",
+            "radius":        int(radius_miles),
+            "unit":          "miles",
+            "startDateTime": start_dt,
+            "endDateTime":   end_dt,
+            "size":          5,
+            "countryCode":   "US",
+            "sort":          "relevance,desc",
+        }
+        if classification:
+            params["classificationName"] = classification
+        if extra_keyword:
+            params["keyword"] = extra_keyword
+        elif kw_lower and not classification:
+            # No category match — pass the raw keyword for TM to search by
+            params["keyword"] = specific_keyword.strip()
+
         response = requests.get(
             "https://app.ticketmaster.com/discovery/v2/events.json",
-            params={
-                "apikey":        TICKETMASTER_API_KEY,
-                "latlong":       f"{lat},{lng}",
-                "radius":        int(radius_miles),
-                "unit":          "miles",
-                "startDateTime": start_dt,
-                "endDateTime":   end_dt,
-                "size":          5,
-                "countryCode":   "US",
-                "sort":          "relevance,desc",
-            },
+            params=params,
             timeout=5,
         )
         if response.status_code != 200:
@@ -790,11 +829,11 @@ def render_spot_card(spot, location_input, user_id, index, mode):
 # ==========================================
 # 5. ASYNC DATA GATHERER
 # ==========================================
-async def gather_all_data(lat, lng, semantic_query, distance, target_date_str, user_id):
+async def gather_all_data(lat, lng, semantic_query, distance, target_date_str, user_id, specific_keyword=""):
     async def _events_with_timeout():
         try:
             return await asyncio.wait_for(
-                asyncio.to_thread(fetch_live_events, lat, lng, distance, target_date_str),
+                asyncio.to_thread(fetch_live_events, lat, lng, distance, target_date_str, specific_keyword),
                 timeout=5.0
             )
         except (asyncio.TimeoutError, Exception):
@@ -1040,7 +1079,8 @@ else:
                         def _run_gather():
                             return gather_all_data(
                                 lat, lng, semantic_query, st.session_state.mem_dist,
-                                target_date_str, st.session_state.user.id
+                                target_date_str, st.session_state.user.id,
+                                specific_keyword=st.session_state.filters_dict.get('specific', '')
                             )
                         try:
                             weather_report, raw_places, live_events_data, db_excluded, user_favorites = asyncio.run(_run_gather())
