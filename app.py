@@ -74,6 +74,16 @@ custom_css = """
     .icon-btn:hover { transform: scale(1.15); }
     
     @keyframes fadeSlideUp { from {opacity: 0; transform: translateY(20px);} to { opacity: 1; transform: translateY(0); } }
+
+    /* Dark mode text visibility */
+    @media (prefers-color-scheme: dark) {
+        .stTextInput > label, .stSelectbox > label, .stRadio > label,
+        .stCheckbox > label, .stTextArea > label, .stMultiSelect > label,
+        .stSlider > label, .stNumberInput > label { color: #fafafa !important; }
+        p, .stMarkdown p { color: #e0e0e0 !important; }
+        h1, h2, h3, h4 { color: #fafafa !important; }
+        .stMarkdown { color: #e0e0e0 !important; }
+    }
 </style>
 """
 st.markdown(custom_css, unsafe_allow_html=True)
@@ -501,20 +511,21 @@ def render_spot_card(spot, location_input, user_id, index, mode):
     sms_url = f"sms:?&body={encoded_share}"
     email_url = f"mailto:?subject={urllib.parse.quote('Wild Plan: ' + spot['name'])}&body={encoded_share}"
     
+    text_to_check = f"{spot['name']} {spot.get('category', '')} {spot.get('why_its_perfect', '')}".lower()
+    if "comedy" in text_to_check or "stand-up" in text_to_check or "laugh" in text_to_check:
+        fallback_url = "https://images.unsplash.com/photo-1585699324551-f6c309eedeca?w=800&q=80"
+    elif "outdoor" in text_to_check or "amphitheater" in text_to_check or "festival" in text_to_check:
+        fallback_url = "https://images.unsplash.com/photo-1459749411175-04bf5292ceea?w=800&q=80"
+    elif "music" in text_to_check or "concert" in text_to_check or "jazz" in text_to_check or "band" in text_to_check:
+        fallback_url = "https://images.unsplash.com/photo-1540039155732-d68a96670afb?w=800&q=80"
+    else:
+        fallback_url = "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80"
+
     if spot.get('photo_ref'):
         img_url = f"https://places.googleapis.com/v1/{spot['photo_ref']}/media?key={GOOGLE_API_KEY}&maxHeightPx=400&maxWidthPx=800"
+        img_html = f'<img src="{img_url}" class="wild-card-img" onerror="this.onerror=null;this.src=\'{fallback_url}\'">'
     else:
-        text_to_check = f"{spot['name']} {spot.get('category', '')} {spot.get('why_its_perfect', '')}".lower()
-        if "comedy" in text_to_check or "stand-up" in text_to_check or "laugh" in text_to_check:
-            img_url = "https://images.unsplash.com/photo-1585699324551-f6c309eedeca?w=800&q=80" 
-        elif "outdoor" in text_to_check or "amphitheater" in text_to_check or "festival" in text_to_check:
-            img_url = "https://images.unsplash.com/photo-1459749411175-04bf5292ceea?w=800&q=80" 
-        elif "music" in text_to_check or "concert" in text_to_check or "jazz" in text_to_check or "band" in text_to_check:
-            img_url = "https://images.unsplash.com/photo-1540039155732-d68a96670afb?w=800&q=80" 
-        else:
-            img_url = "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80" 
-            
-    img_html = f'<img src="{img_url}" class="wild-card-img">'
+        img_html = f'<img src="{fallback_url}" class="wild-card-img">'
     website_icon = f'<a href="{spot["website"]}" target="_blank" class="icon-btn" title="Visit Website">🌐</a>' if spot.get('website') else ""
 
     # Generate visual tag pills based on what the AI learned
@@ -835,6 +846,7 @@ else:
                 
                 # --- RENDER CARDS ---
                 wild_count = get_wild_count_today()
+                st.write(f"DEBUG counter: {wild_count}")
                 if wild_count:
                     st.markdown(f"**🔥 {wild_count} {'person' if wild_count == 1 else 'people'} got wild today**")
 
