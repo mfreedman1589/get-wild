@@ -814,23 +814,17 @@ else:
                 icon = "🚫" if saved['rating'] == 1 else "📍"
                 with st.expander(f"{icon} {saved['spot_name']}"):
                     st.caption(saved['address'])
-                    
+
                     with st.form(f"rate_form_{saved['id']}"):
                         current_rating = saved['rating'] if saved['rating'] else 3
                         new_rating = st.slider("Rate this spot (1-5 Stars. 1 = Blacklist)", 1, 5, current_rating)
                         notes = st.text_input("Private Notes", value=saved.get('user_notes', ''))
-                        
-                        col_update, col_del = st.columns(2)
-                        with col_update:
-                            update_btn = st.form_submit_button("Update Feedback", type="primary")
-                        with col_del:
-                            delete_btn = st.form_submit_button("🗑️ Delete Spot")
-                        
-                        if update_btn:
+
+                        if st.form_submit_button("Update Feedback", type="primary"):
                             supabase.table('saved_spots').update({'rating': new_rating, 'user_notes': notes}).eq('id', saved['id']).execute()
                             st.success("Feedback saved!")
                             st.rerun()
-                            
-                        if delete_btn:
-                            delete_spot_from_db(saved['id'])
-                            st.rerun()
+
+                    if st.button("🗑️ Delete Spot", key=f"del_{saved['id']}"):
+                        delete_spot_from_db(saved['id'])
+                        st.rerun()
