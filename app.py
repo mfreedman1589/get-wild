@@ -835,6 +835,5 @@ else:
                             st.rerun()
 
                     if st.button("🗑️ Delete Spot", key=f"del_{saved['id']}"):
-                        if delete_spot_from_db(saved['id']):
-                            st.session_state.saved_spots_dirty = True
-                            st.rerun()
+                        delete_spot_from_db(saved['id'])
+                        st.success("Delete attempted")
