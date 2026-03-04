@@ -58,25 +58,49 @@ custom_css = """
     .hero-title { color: #2e7d32; font-family: 'Helvetica Neue', sans-serif; font-size: 3.5rem; font-weight: 800; letter-spacing: -1px; text-transform: uppercase; margin-bottom: 0; line-height: 1.1; }
     .hero-subtitle { color: #558b2f; font-size: 1.2rem; font-weight: 400; letter-spacing: 1px; margin-top: 10px; }
 
-    /* CARD — outer container is the st.container() stVerticalBlock.
-       Target the innermost stVerticalBlock containing .wc-shell that does
-       NOT itself contain another stVerticalBlock with .wc-shell. */
+    /* CARD — .wc-shell is the always-visible fallback card border.
+       stVerticalBlock :has() is the progressive enhancement (attaches buttons inside card).
+       When the container approach works it strips .wc-shell's own border to avoid doubling. */
+    .wc-shell {
+        border: 1px solid #e0e0e0;
+        border-radius: 12px 12px 0 0;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        overflow: hidden;
+        background: #ffffff;
+        margin: 16px 0 0 0;
+        animation: fadeSlideUp 0.5s ease-out forwards;
+    }
+    .wc-shell-special {
+        border: 2px solid #2d6a4f !important;
+        box-shadow: 0 0 20px rgba(45,106,79,0.4), 0 0 40px rgba(45,106,79,0.2) !important;
+        animation: fadeSlideUp 0.5s ease-out, wildGlow 3s ease-in-out 0.5s infinite !important;
+    }
+    @keyframes wildGlow {
+        0%, 100% { box-shadow: 0 0 20px rgba(45,106,79,0.4), 0 0 40px rgba(45,106,79,0.2); }
+        50%       { box-shadow: 0 0 30px rgba(45,106,79,0.6), 0 0 60px rgba(45,106,79,0.3); }
+    }
+
+    /* Enhanced container (progressive enhancement via :has()) */
     div[data-testid="stVerticalBlock"]:has(.wc-shell):not(:has([data-testid="stVerticalBlock"]:has(.wc-shell))) {
         background: #ffffff;
         border-radius: 12px;
         box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-        border: 1px solid #e8e8e8;
+        border: 1px solid #e0e0e0;
         overflow: hidden;
         margin: 16px 0 24px 0;
         gap: 0 !important;
         animation: fadeSlideUp 0.5s ease-out forwards;
     }
     div[data-testid="stVerticalBlock"]:has(.wc-shell-special):not(:has([data-testid="stVerticalBlock"]:has(.wc-shell-special))) {
-        border: 2px solid #FFD700 !important;
-        box-shadow: 0 0 20px rgba(255,215,0,0.35) !important;
+        border: 2px solid #2d6a4f !important;
+        animation: fadeSlideUp 0.5s ease-out, wildGlow 3s ease-in-out 0.5s infinite !important;
     }
-    /* Action button row — light top border, attached inside the card */
-    div[data-testid="stVerticalBlock"]:has(.wc-shell):not(:has([data-testid="stVerticalBlock"]:has(.wc-shell))) > div > div[data-testid="stHorizontalBlock"],
+    /* When container approach active: strip fallback styling from .wc-shell */
+    div[data-testid="stVerticalBlock"]:has(.wc-shell):not(:has([data-testid="stVerticalBlock"]:has(.wc-shell))) .wc-shell {
+        border: none !important; box-shadow: none !important;
+        border-radius: 0 !important; margin: 0 !important; animation: none !important;
+    }
+    /* Button row: attached inside card with top separator */
     div[data-testid="stVerticalBlock"]:has(.wc-shell):not(:has([data-testid="stVerticalBlock"]:has(.wc-shell))) [data-testid="stHorizontalBlock"] {
         border-top: 1px solid #f0f0f0;
         padding: 8px 16px 12px;
@@ -106,8 +130,12 @@ custom_css = """
         .stTextInput > label, .stSelectbox > label, .stRadio > label,
         .stCheckbox > label, .stTextArea > label, .stMultiSelect > label,
         .stSlider > label, .stNumberInput > label { color: #f0f0f0 !important; }
+        .wc-shell { background: #1e1e1e !important; border-color: #333 !important; }
         div[data-testid="stVerticalBlock"]:has(.wc-shell):not(:has([data-testid="stVerticalBlock"]:has(.wc-shell))) {
             background: #1e1e1e !important; border-color: #333 !important;
+        }
+        div[data-testid="stVerticalBlock"]:has(.wc-shell):not(:has([data-testid="stVerticalBlock"]:has(.wc-shell))) .wc-shell {
+            background: transparent !important;
         }
         div[data-testid="stVerticalBlock"]:has(.wc-shell):not(:has([data-testid="stVerticalBlock"]:has(.wc-shell))) [data-testid="stHorizontalBlock"] {
             border-top-color: #333 !important; background: #1e1e1e !important;
@@ -551,7 +579,13 @@ def match_photos_to_results(recommendations, raw_places):
     for place in (raw_places or []):
         name = place.get('displayName', {}).get('text', '').lower().replace(' ', '')
         if name and place.get('photo_url'):
-            place_photos[name] = place['photo_url']
+            url = place['photo_url']
+            try:
+                r = requests.head(url, timeout=3)
+                if r.status_code == 200:
+                    place_photos[name] = url
+            except:
+                pass
     for rec in recommendations:
         rec_name = rec.get('name', '').lower().replace(' ', '')
         if rec_name in place_photos:
@@ -623,25 +657,25 @@ def render_spot_card(spot, location_input, user_id, index, mode):
     pitch     = spot.get('why_its_perfect', '')
 
     # Utility row links
-    name_js      = spot['name'].replace("'", "\\'")
-    addr_js      = address.replace("'", "\\'")
-    map_url_js   = map_url.replace("'", "\\'")
-    share_text   = f"Let's go to {spot['name']}! {address}"
-    share_text_js = share_text.replace("'", "\\'")
-    share_nav    = f"await navigator.share({{title:'{name_js}',text:'{share_text_js}',url:'{map_url_js}'}});"
-    share_clip   = f"await navigator.clipboard.writeText('{share_text_js}\\n{map_url_js}');this.textContent='✓ Copied';setTimeout(()=>this.textContent='↗ Share',2000);"
-    share_onclick = f"(async()=>{{if(navigator.share){{{share_nav}}}else{{{share_clip}}}}})();return false;"
-    website_part = f'<a href="{spot["website"]}" target="_blank" class="wc-util-link">🌐 Website</a><span class="wc-util-sep">|</span>' if spot.get('website') else ''
+    share_text     = f"Let's go to {spot['name']}! {address}\n{map_url}"
+    share_encoded  = urllib.parse.quote(share_text)
+    share_subj_enc = urllib.parse.quote(f"Wild Plan: {spot['name']}")
+    share_body_enc = urllib.parse.quote(share_text)
+    sep = '<span class="wc-util-sep">|</span>'
+    website_part = f'<a href="{spot["website"]}" target="_blank" class="wc-util-link">🌐 Website</a>{sep}' if spot.get('website') else ''
     utility_html = (
         f'<div class="wc-utility">'
         f'{website_part}'
-        f'<a href="{map_url}" target="_blank" class="wc-util-link">🗺️ Directions</a>'
-        f'<span class="wc-util-sep">|</span>'
-        f'<a href="{uber_url}" target="_blank" class="wc-util-link">🚗 Uber</a>'
-        f'<span class="wc-util-sep">|</span>'
-        f'<a href="#" class="wc-util-link" onclick="{share_onclick}">↗ Share</a>'
+        f'<a href="{map_url}" target="_blank" class="wc-util-link">🗺️ Directions</a>{sep}'
+        f'<a href="{uber_url}" target="_blank" class="wc-util-link">🚗 Uber</a>{sep}'
+        f'<a href="sms:?body={share_encoded}" class="wc-util-link">📱 Text</a>{sep}'
+        f'<a href="mailto:?subject={share_subj_enc}&body={share_body_enc}" class="wc-util-link">📧 Email</a>{sep}'
+        f'<a href="https://wa.me/?text={share_encoded}" target="_blank" class="wc-util-link">💬 WhatsApp</a>'
         f'</div>'
     )
+
+    if mode == "get_wild":
+        st.markdown('<p style="color:#2d6a4f;font-weight:700;font-size:1.05rem;margin:8px 0 4px 0;">🎲 Your Wild Adventure Awaits</p>', unsafe_allow_html=True)
 
     shell_cls = "wc-shell" + (" wc-shell-special" if mode == "get_wild" else "")
     html_card = f"""<div class="{shell_cls}">
@@ -963,7 +997,7 @@ else:
                         )
                         view_state = pdk.ViewState(latitude=map_data[0]['lat'], longitude=map_data[0]['lon'], zoom=12)
                         st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip={"html": "<b>{name}</b>"}))
-                        st.caption("Click 🗺️ on any card to open in Google Maps")
+                        st.caption("📍 Tap any pin to see details • Use 🗺️ on each card to open in Google Maps")
                 
                 # --- RENDER CARDS ---
                 for index, spot in enumerate(results.get("recommendations", [])):
