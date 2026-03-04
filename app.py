@@ -129,6 +129,7 @@ if 'trigger_fetch' not in st.session_state: st.session_state.trigger_fetch = Fal
 if 'saved_spots_dirty' not in st.session_state: st.session_state.saved_spots_dirty = False
 if 'fetch_timed_out' not in st.session_state: st.session_state.fetch_timed_out = False
 if 'skip_cache' not in st.session_state: st.session_state.skip_cache = False
+if 'show_onboarding' not in st.session_state: st.session_state.show_onboarding = False
 
 # Persistent memory state variables
 if 'mem_loc' not in st.session_state: st.session_state.mem_loc = ""
@@ -770,6 +771,9 @@ if st.session_state.user is None:
                 try:
                     res = supabase.auth.sign_in_with_password({"email": email_login, "password": password_login})
                     st.session_state.user = res.user
+                    prof = get_profile(res.user.id)
+                    if not prof or not prof.get('first_name'):
+                        st.session_state.show_onboarding = True
                     st.rerun()
                 except Exception as e: st.error("Login failed. Check your credentials.")
 
@@ -781,8 +785,49 @@ if st.session_state.user is None:
                 try:
                     res = supabase.auth.sign_up({"email": email_signup, "password": password_signup})
                     st.session_state.user = res.user
+                    st.session_state.show_onboarding = True
                     st.rerun()
                 except Exception as e: st.error(f"Signup failed: {e}")
+
+elif st.session_state.show_onboarding:
+    st.markdown("## 🌿 Welcome to Get Wild!")
+    st.subheader("Tell us about yourself for the best recommendations")
+    st.write("This takes 60 seconds and makes every suggestion feel personal.")
+    st.write("")
+
+    with st.form("onboarding_form"):
+        ob_name = st.text_input("Your first name *", placeholder="e.g. Alex")
+        ob_group = st.selectbox("Who do you usually go out with?",
+                                ["Just Me", "With a Partner", "With Friends", "With Family"])
+        ob_alcohol = st.radio("Alcohol preference", ["Drinks Alcohol", "Non-Alcoholic Only"], horizontal=True)
+        dietary_options = ["None", "Vegan", "Vegetarian", "Gluten-Free", "Nut Allergy", "Halal", "Kosher"]
+        ob_dietary = st.multiselect("Any dietary needs?", dietary_options, default=["None"])
+        ob_vibe = st.text_input("Describe your ideal vibe (optional)",
+                                placeholder="e.g. cozy, lively, sophisticated, outdoorsy")
+        ob_stroller = st.checkbox("Require Stroller Accessible venues")
+        ob_dog = st.checkbox("Prefer Dog-Friendly venues")
+
+        submitted = st.form_submit_button("Let's Get Wild 🌿", type="primary", use_container_width=True)
+        if submitted:
+            if not ob_name.strip():
+                st.error("Please enter your first name to continue.")
+            else:
+                dietary_clean = [d for d in ob_dietary if d != "None"]
+                supabase.table('user_profiles').upsert({
+                    'id': st.session_state.user.id,
+                    'first_name': ob_name.strip(),
+                    'needs_stroller_access': ob_stroller,
+                    'needs_dog_friendly': ob_dog,
+                    'vibe_preference': ob_vibe.strip(),
+                    'needs_nonalcoholic': ob_alcohol == "Non-Alcoholic Only",
+                    'dietary_restrictions': ', '.join(dietary_clean),
+                }).execute()
+                st.session_state.show_onboarding = False
+                st.rerun()
+
+    if st.button("Skip for now →", type="secondary"):
+        st.session_state.show_onboarding = False
+        st.rerun()
 
 else:
     tab_explore, tab_profile, tab_saved = st.tabs(["🌍 Explore", "👤 My Profile", "⭐ Saved Spots"])
