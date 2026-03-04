@@ -58,10 +58,31 @@ custom_css = """
     .hero-title { color: #2e7d32; font-family: 'Helvetica Neue', sans-serif; font-size: 3.5rem; font-weight: 800; letter-spacing: -1px; text-transform: uppercase; margin-bottom: 0; line-height: 1.1; }
     .hero-subtitle { color: #558b2f; font-size: 1.2rem; font-weight: 400; letter-spacing: 1px; margin-top: 10px; }
 
-    /* CARD */
-    .wc-card { background: #ffffff; border-radius: 12px 12px 0 0; overflow: hidden; margin: 16px 0 0 0; box-shadow: 0 2px 12px rgba(0,0,0,0.08); border: 1px solid #e8e8e8; border-bottom: none; animation: fadeSlideUp 0.5s ease-out forwards; }
-    .wc-special { border: 2px solid #FFD700 !important; box-shadow: 0 0 20px rgba(255,215,0,0.35) !important; }
+    /* CARD — outer container is the st.container() stVerticalBlock.
+       Target the innermost stVerticalBlock containing .wc-shell that does
+       NOT itself contain another stVerticalBlock with .wc-shell. */
+    div[data-testid="stVerticalBlock"]:has(.wc-shell):not(:has([data-testid="stVerticalBlock"]:has(.wc-shell))) {
+        background: #ffffff;
+        border-radius: 12px;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        border: 1px solid #e8e8e8;
+        overflow: hidden;
+        margin: 16px 0 24px 0;
+        gap: 0 !important;
+        animation: fadeSlideUp 0.5s ease-out forwards;
+    }
+    div[data-testid="stVerticalBlock"]:has(.wc-shell-special):not(:has([data-testid="stVerticalBlock"]:has(.wc-shell-special))) {
+        border: 2px solid #FFD700 !important;
+        box-shadow: 0 0 20px rgba(255,215,0,0.35) !important;
+    }
+    /* Action button row — light top border, attached inside the card */
+    div[data-testid="stVerticalBlock"]:has(.wc-shell):not(:has([data-testid="stVerticalBlock"]:has(.wc-shell))) > div > div[data-testid="stHorizontalBlock"],
+    div[data-testid="stVerticalBlock"]:has(.wc-shell):not(:has([data-testid="stVerticalBlock"]:has(.wc-shell))) [data-testid="stHorizontalBlock"] {
+        border-top: 1px solid #f0f0f0;
+        padding: 8px 16px 12px;
+    }
 
+    /* Card inner content */
     .wc-img-wrap { position: relative; width: 100%; height: 200px; overflow: hidden; }
     .wc-img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .wc-tier { position: absolute; bottom: 10px; left: 12px; background: rgba(0,0,0,0.62); color: #fff; font-size: 0.68rem; font-weight: 600; letter-spacing: 0.5px; padding: 4px 10px; border-radius: 20px; text-transform: uppercase; }
@@ -79,21 +100,24 @@ custom_css = """
     .wc-util-link { color: #aaa; font-size: 0.78rem; text-decoration: none; font-weight: 500; transition: color 0.15s; }
     .wc-util-link:hover { color: #555; text-decoration: underline; }
     .wc-util-sep { color: #ddd; padding: 0 4px; font-size: 0.78rem; }
-    div.stMarkdown:has(.wc-card) + div[data-testid="stHorizontalBlock"] { border: 1px solid #e8e8e8; border-top: 1px solid #f0f0f0; border-radius: 0 0 12px 12px; background: #ffffff; padding: 4px 16px 12px; margin-bottom: 20px; }
 
     /* Dark mode */
     @media (prefers-color-scheme: dark) {
         .stTextInput > label, .stSelectbox > label, .stRadio > label,
         .stCheckbox > label, .stTextArea > label, .stMultiSelect > label,
         .stSlider > label, .stNumberInput > label { color: #f0f0f0 !important; }
-        .wc-card { background: #1e1e1e !important; border-color: #333 !important; }
+        div[data-testid="stVerticalBlock"]:has(.wc-shell):not(:has([data-testid="stVerticalBlock"]:has(.wc-shell))) {
+            background: #1e1e1e !important; border-color: #333 !important;
+        }
+        div[data-testid="stVerticalBlock"]:has(.wc-shell):not(:has([data-testid="stVerticalBlock"]:has(.wc-shell))) [data-testid="stHorizontalBlock"] {
+            border-top-color: #333 !important; background: #1e1e1e !important;
+        }
         .wc-name { color: #f0f0f0 !important; }
         .wc-meta, .wc-address { color: #999 !important; }
         .wc-pitch { color: #ccc !important; }
         .wc-hr { border-color: #333 !important; }
         .wc-util-link { color: #666 !important; }
         .wc-util-link:hover { color: #999 !important; }
-        div.stMarkdown:has(.wc-card) + div[data-testid="stHorizontalBlock"] { background: #1e1e1e !important; border-color: #333 !important; border-top-color: #2a2a2a !important; }
         .wc-tag { background: #1a3320 !important; border-color: #2a5230 !important; }
     }
 
@@ -545,7 +569,6 @@ def match_photos_to_results(recommendations, raw_places):
 
 def render_spot_card(spot, location_input, user_id, index, mode):
     title_prefix = f"{index}." if mode == "top_3" else "🎲"
-    special_class = "wc-special" if mode == "get_wild" else ""
 
     search_term = spot['name'].replace(' ', '+') + f"+{location_input.replace(' ', '+')}"
     map_url = f"https://www.google.com/maps/search/?api=1&query={search_term}"
@@ -600,17 +623,14 @@ def render_spot_card(spot, location_input, user_id, index, mode):
     pitch     = spot.get('why_its_perfect', '')
 
     # Utility row links
-    name_js  = spot['name'].replace("'", "\\'")
-    addr_js  = address.replace("'", "\\'")
-    share_subject = urllib.parse.quote(f"Wild Plan: {spot['name']}")
-    share_body    = urllib.parse.quote(f"Let's go to {spot['name']}!\n{address}\n{map_url}")
-    share_href    = f"mailto:?subject={share_subject}&body={share_body}"
-    share_onclick = (
-        f"if(navigator.share){{"
-        f"event.preventDefault();"
-        f"navigator.share({{title:'{name_js}',text:'Let\\'s go to {name_js}! {addr_js}',url:'{map_url}'}})"
-        f"}}"
-    )
+    name_js      = spot['name'].replace("'", "\\'")
+    addr_js      = address.replace("'", "\\'")
+    map_url_js   = map_url.replace("'", "\\'")
+    share_text   = f"Let's go to {spot['name']}! {address}"
+    share_text_js = share_text.replace("'", "\\'")
+    share_nav    = f"await navigator.share({{title:'{name_js}',text:'{share_text_js}',url:'{map_url_js}'}});"
+    share_clip   = f"await navigator.clipboard.writeText('{share_text_js}\\n{map_url_js}');this.textContent='✓ Copied';setTimeout(()=>this.textContent='↗ Share',2000);"
+    share_onclick = f"(async()=>{{if(navigator.share){{{share_nav}}}else{{{share_clip}}}}})();return false;"
     website_part = f'<a href="{spot["website"]}" target="_blank" class="wc-util-link">🌐 Website</a><span class="wc-util-sep">|</span>' if spot.get('website') else ''
     utility_html = (
         f'<div class="wc-utility">'
@@ -619,11 +639,12 @@ def render_spot_card(spot, location_input, user_id, index, mode):
         f'<span class="wc-util-sep">|</span>'
         f'<a href="{uber_url}" target="_blank" class="wc-util-link">🚗 Uber</a>'
         f'<span class="wc-util-sep">|</span>'
-        f'<a href="{share_href}" class="wc-util-link" onclick="{share_onclick}">↗ Share</a>'
+        f'<a href="#" class="wc-util-link" onclick="{share_onclick}">↗ Share</a>'
         f'</div>'
     )
 
-    html_card = f"""<div class="wc-card {special_class}">
+    shell_cls = "wc-shell" + (" wc-shell-special" if mode == "get_wild" else "")
+    html_card = f"""<div class="{shell_cls}">
   <div class="wc-img-wrap">
     <img src="{img_url}" class="wc-img" alt="">
     <div class="wc-tier">✦ {tier_name}</div>
@@ -639,18 +660,18 @@ def render_spot_card(spot, location_input, user_id, index, mode):
   </div>
 </div>
 """
-    st.markdown(html_card, unsafe_allow_html=True)
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("⭐ Save", key=f"save_{index}_{spot['name']}", use_container_width=True, help="Save for later"):
-            save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'))
-    with col2:
-        if st.button("✅ I'm Going", key=f"going_{index}_{spot['name']}", use_container_width=True, type="primary", help="Mark as chosen"):
-            save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'), notes="chosen")
-    with col3:
-        if st.button("👎 Not for me", key=f"nope_{index}_{spot['name']}", use_container_width=True, help="Never suggest this again"):
-            save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'), rating=1, notes="Blacklisted via quick-button.")
+    with st.container():
+        st.markdown(html_card, unsafe_allow_html=True)
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button("⭐ Save", key=f"save_{index}_{spot['name']}", use_container_width=True, help="Save for later"):
+                save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'))
+        with col2:
+            if st.button("✅ I'm Going", key=f"going_{index}_{spot['name']}", use_container_width=True, type="primary", help="Mark as chosen"):
+                save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'), notes="chosen")
+        with col3:
+            if st.button("👎 Not for me", key=f"nope_{index}_{spot['name']}", use_container_width=True, help="Never suggest this again"):
+                save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'), rating=1, notes="Blacklisted via quick-button.")
 
 # ==========================================
 # 5. ASYNC DATA GATHERER
@@ -775,9 +796,10 @@ else:
             with btn_col1: top_3_clicked = st.button("🌟 Top 3 Recommendations", use_container_width=True)
             with btn_col2: get_wild_clicked = st.button("🎲 GET WILD", type="primary", use_container_width=True)
 
-            _wc = get_wild_count_today()
-            if _wc:
-                st.markdown(f"<div style='text-align:center;color:#e65100;font-weight:600;font-size:0.9rem;margin-top:4px;'>🔥 {_wc} {'person' if _wc == 1 else 'people'} got wild today — join them</div>", unsafe_allow_html=True)
+            wild_count = get_wild_count_today()
+            st.write(f"DEBUG wild count: {wild_count}")
+            if wild_count is not None and wild_count > 0:
+                st.markdown(f"<div style='text-align:center;color:#e65100;font-weight:600;font-size:0.9rem;margin-top:4px;'>🔥 {wild_count} {'person' if wild_count == 1 else 'people'} got wild today — join them</div>", unsafe_allow_html=True)
 
             if top_3_clicked or get_wild_clicked:
                 if not ui_loc and not st.session_state.mem_gps_active:
