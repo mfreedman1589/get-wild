@@ -83,6 +83,7 @@ if 'current_mode' not in st.session_state: st.session_state.current_mode = None
 if 'session_seen_spots' not in st.session_state: st.session_state.session_seen_spots = []
 if 'search_active' not in st.session_state: st.session_state.search_active = False
 if 'trigger_fetch' not in st.session_state: st.session_state.trigger_fetch = False
+if 'saved_spots_dirty' not in st.session_state: st.session_state.saved_spots_dirty = False
 
 # Persistent memory state variables
 if 'mem_loc' not in st.session_state: st.session_state.mem_loc = ""
@@ -143,9 +144,16 @@ def generate_cache_key(filters_dict, location_name, target_date_str, mode):
 
 def delete_spot_from_db(spot_id):
     try:
-        supabase.table('saved_spots').delete().eq('id', spot_id).execute()
-        st.toast("🗑️ Spot permanently deleted.")
-    except Exception as e: st.error("Database error while deleting.")
+        response = supabase.table('saved_spots').delete().eq('id', spot_id).execute()
+        if response.data:
+            st.toast("🗑️ Spot permanently deleted.")
+            return True
+        else:
+            st.error("Delete failed: no matching record found.")
+            return False
+    except Exception as e:
+        st.error("Database error while deleting.")
+        return False
 
 # ==========================================
 # 4. HELPER FUNCTIONS (The Engine)
@@ -804,9 +812,11 @@ else:
     with tab_saved:
         st.subheader("Your Adventure Ledger")
         st.write("Rate your past spots. Spots rated 1-star will NEVER be recommended again.")
+        # Always re-fetch fresh from Supabase — no caching
+        st.session_state.saved_spots_dirty = False
         res = supabase.table('saved_spots').select('*').eq('user_id', st.session_state.user.id).order('saved_at', desc=True).execute()
         saved_spots = res.data if res.data else []
-        
+
         if not saved_spots:
             st.info("You haven't saved any spots yet. Go explore!")
         else:
@@ -823,8 +833,10 @@ else:
                         if st.form_submit_button("Update Feedback", type="primary"):
                             supabase.table('saved_spots').update({'rating': new_rating, 'user_notes': notes}).eq('id', saved['id']).execute()
                             st.success("Feedback saved!")
+                            st.session_state.saved_spots_dirty = True
                             st.rerun()
 
                     if st.button("🗑️ Delete Spot", key=f"del_{saved['id']}"):
-                        delete_spot_from_db(saved['id'])
-                        st.rerun()
+                        if delete_spot_from_db(saved['id']):
+                            st.session_state.saved_spots_dirty = True
+                            st.rerun()
