@@ -492,13 +492,13 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
         """
 
     if filters_dict.get('vibe') == "Outside":
-        weather_rule = "3. WEATHER: If RAIN, SNOW, or under 45°F → prefer indoor or heated-patio venues."
+        weather_rule = "4. WEATHER: If RAIN, SNOW, or under 45°F → prefer indoor or heated-patio venues."
     else:
-        weather_rule = "3. WEATHER: No weather restrictions (user wants indoor or is flexible)."
+        weather_rule = "4. WEATHER: No weather restrictions (user wants indoor or is flexible)."
 
     specific_rule = ""
     if filters_dict.get('specific'):
-        specific_rule = f"""5. SPECIFIC REQUEST — HARD FILTER ON ALL RESULTS: '{filters_dict['specific']}'
+        specific_rule = f"""7. SPECIFIC REQUEST — HARD FILTER ON ALL RESULTS: '{filters_dict['specific']}'
     Applies to every recommendation, not just one. Honor literal and conceptual meaning:
     - "happy hour" → bars/restaurants with happy hour specials; mention deals/times in why_its_perfect
     - "live music" → confirmed live music venues only
@@ -506,15 +506,53 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
     matched_tags MUST be populated with 1-3 keywords from this request (never leave empty).
     If no data genuinely matches, say so honestly — don't force irrelevant results."""
 
+    # Geography rule
+    geo_center = f"{location_name}{f' (lat={lat:.4f}, lng={lng:.4f})' if lat and lng else ''}"
+    geo_rule = (
+        f"1. STRICT GEOGRAPHY: Search center is {geo_center}. "
+        f"Every result MUST be within {radius_miles} miles. "
+        "For events specifically: the venue must be in the search city or its immediate suburbs — NOT a distant city. "
+        "OUT-OF-RANGE examples for a Northern VA/DC search: Virginia Beach, Richmond, Ocean City, Baltimore. "
+        "If an event venue city does not match the search location or its suburbs, discard it and use a Google Places result."
+    )
+
+    # Events rule — hierarchy depends on food filter
+    food_filter = filters_dict.get('food', '')
+    if food_filter == "Full Meal":
+        events_rule = (
+            "2. DATA SOURCE — FULL MEAL MODE: Google Places is your ONLY source. "
+            "The user wants restaurants and dining. DO NOT use any live events regardless of verification. "
+            "Ignore the events section entirely. All 3 results must be restaurants/dining from Google Places."
+        )
+    elif food_filter == "Just Drinks/Coffee":
+        events_rule = (
+            "2. DATA SOURCE PRIORITY: Google Places is PRIMARY (use for at least 2 of 3 results). "
+            "One event slot is acceptable ONLY if ALL of these are true: "
+            "(a) date_verified=True on today's date, "
+            "(b) the event venue is within the search radius in the correct city/suburbs, "
+            "(c) the event is drinks or nightlife related. "
+            "If no event meets all three criteria, use Google Places for all results."
+        )
+    else:  # No Food Needed
+        events_rule = (
+            "2. DATA SOURCE PRIORITY: Google Places is PRIMARY — default to it for all results. "
+            "Events may fill ONE slot only if ALL of these are true: "
+            "(a) date_verified=True on today's date, "
+            "(b) venue is physically inside the search city or immediate suburbs within the radius. "
+            "If any doubt about an event's location or date, skip it and use a Google Places result."
+        )
+
     system_prompt = f"""You are a local concierge for 'Get Wild'.
 
 CONTEXT: {location_name} | {weather_report} | {target_date_str} ({relative_day}) | {filters_dict['time']} | {filters_dict['group']}, {filters_dict['food']}, {filters_dict['vibe']}
 {profile_context}{blacklist_context}
 RULES:
-1. STRICT GEOGRAPHY: Search center is {location_name}{f" (lat={lat:.4f}, lng={lng:.4f})" if lat and lng else ""}. Every recommendation MUST be within {radius_miles} miles of this point. Distant cities (e.g., Virginia Beach when searching near DC, or Ocean City when searching in Northern VA) are NOT nearby — skip them entirely and use a Google Places result instead. If an event venue is more than {radius_miles} miles away, discard it.
-2. EVENTS: Only use events with date_verified=True on {relative_day} ({target_date_str}). why_its_perfect must include venue name and address. If no verified events exist, use Places data only — never fabricate event details.
+{geo_rule}
+{events_rule}
+3. EVENTS DATE CHECK: Only events with date_verified=True on {relative_day} ({target_date_str}) are eligible. why_its_perfect must include venue name and address. Never fabricate event details.
 {weather_rule}
-4. NO HALLUCINATION: Use exact addresses and URLs from input data. Never invent.
+5. NO HALLUCINATION: Use exact addresses and URLs from input data. Never invent.
+6. VARIETY: Do not return 3 events, 3 of the same venue type, or 3 of the same category. Google Places results must provide the backbone of variety.
 {specific_rule}
 
 {instruction}
