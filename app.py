@@ -399,7 +399,19 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
 
     specific_rule = ""
     if filters_dict.get('specific'):
-        specific_rule = f"5. MANDATORY SPECIFIC REQUIREMENT: The user explicitly requested '{filters_dict['specific']}'. EVERY recommendation MUST align with this vibe. Pluck the 2-3 most important keywords from this request and output them in the 'matched_tags' array."
+        specific_rule = f"""5. MANDATORY SPECIFIC REQUIREMENT — NON-NEGOTIABLE:
+    The user explicitly requested: '{filters_dict['specific']}'
+    This is not a soft preference. It is a hard filter that applies to EVERY SINGLE recommendation, not just one.
+
+    HOW TO HONOR CONCEPTUAL AND TIME-BASED REQUESTS:
+    - "happy hour" → EVERY result must be a bar or restaurant with known happy hour specials. Mention the happy hour explicitly in why_its_perfect (e.g. deals, times, drink specials). Do NOT recommend a coffee shop or park.
+    - "live music" → EVERY result must be a venue with live music. Do not recommend a restaurant that "sometimes has music." Only confirmed live music venues.
+    - "romantic" → EVERY result must have intimate lighting, a quiet atmosphere, and be date-appropriate. No loud sports bars or group-oriented venues.
+    - Apply this same logic to any other keyword: honor the spirit AND the literal meaning of what was asked.
+
+    MATCHED_TAGS IS MANDATORY: When a specific request is provided, you MUST always populate 'matched_tags' with the 1-3 most important keywords extracted from the request. Leaving matched_tags empty when a specific was given is an error.
+
+    HONESTY FALLBACK: If the Places data does not contain venues that genuinely match the specific request, say so honestly in why_its_perfect rather than forcing irrelevant recommendations. You may suggest the user try a different search."""
 
     system_prompt = f"""
     You are a luxury local concierge for an app called 'Get Wild'.
