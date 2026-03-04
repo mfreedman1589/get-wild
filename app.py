@@ -232,8 +232,8 @@ def submit_feedback(user_id, comment):
             'comment': comment.strip(),
         }).execute()
         return True
-    except:
-        return False
+    except Exception as e:
+        return str(e)
 
 def increment_wild_counter(city):
     try:
@@ -809,10 +809,11 @@ with _fb_col:
             if not _fb_comment.strip():
                 st.warning("Please write something before sending.")
             else:
-                if submit_feedback(_fb_user_id, _fb_comment):
+                _fb_result = submit_feedback(_fb_user_id, _fb_comment)
+                if _fb_result is True:
                     st.toast("✅ Feedback sent! Thank you.")
                 else:
-                    st.error("Something went wrong saving your feedback. Please try again.")
+                    st.error(f"DB error: {_fb_result}")
 
 if st.session_state.user is None:
     st.write("---")
