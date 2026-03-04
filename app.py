@@ -754,6 +754,10 @@ else:
             with btn_col1: top_3_clicked = st.button("🌟 Top 3 Recommendations", use_container_width=True)
             with btn_col2: get_wild_clicked = st.button("🎲 GET WILD", type="primary", use_container_width=True)
 
+            _wc = get_wild_count_today()
+            if _wc:
+                st.markdown(f"<div style='text-align:center;color:#e65100;font-weight:600;font-size:0.9rem;margin-top:4px;'>🔥 {_wc} {'person' if _wc == 1 else 'people'} got wild today — join them</div>", unsafe_allow_html=True)
+
             if top_3_clicked or get_wild_clicked:
                 if not ui_loc and not st.session_state.mem_gps_active:
                     st.warning("Please enter a location or click the GPS icon first!")
@@ -777,7 +781,8 @@ else:
                     st.session_state.trigger_fetch = True
                     st.session_state.session_seen_spots = []
                     city = "Nearby" if st.session_state.mem_gps_active else (ui_loc.split()[0].rstrip(',') if ui_loc else "Unknown")
-                    increment_wild_counter(city)
+                    if get_wild_clicked:
+                        increment_wild_counter(city)
                     st.rerun()
 
         # --- SCREEN 2: THE RESULTS & LOADER ---
@@ -915,13 +920,10 @@ else:
                             pickable=True,
                         )
                         view_state = pdk.ViewState(latitude=map_data[0]['lat'], longitude=map_data[0]['lon'], zoom=12)
-                        st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip={"html": "<b>{name}</b><br><a href='{map_url}' target='_blank' style='color:#90caf9;'>📍 Open in Maps</a>"}))
+                        st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip={"html": "<b>{name}</b>"}))
+                        st.caption("Click 🗺️ on any card to open in Google Maps")
                 
                 # --- RENDER CARDS ---
-                wild_count = get_wild_count_today()
-                if wild_count:
-                    st.markdown(f"**🔥 {wild_count} {'person' if wild_count == 1 else 'people'} got wild today**")
-
                 for index, spot in enumerate(results.get("recommendations", [])):
                     render_spot_card(spot, st.session_state.mem_loc, st.session_state.user.id, index + 1, mode)
                     
@@ -998,27 +1000,24 @@ else:
                 nudge_spots = nudge_res.data if nudge_res.data else []
             except:
                 nudge_spots = []
-            for nudge in nudge_spots:
-                st.markdown(
-                    f'<div style="border:2px solid #FFD700;border-radius:10px;padding:14px;background:#fffde7;margin-bottom:12px;">'
-                    f'⭐ <b>How was your visit to {nudge["spot_name"]}?</b> Rate it below.</div>',
-                    unsafe_allow_html=True
-                )
-                with st.form(f"nudge_rate_{nudge['id']}"):
-                    nudge_rating = st.slider("Your rating (1-5)", 1, 5, 3)
-                    if st.form_submit_button("Submit Rating", type="primary"):
-                        supabase.table('saved_spots').update({'rating': nudge_rating}).eq('id', nudge['id']).execute()
-                        st.success("Thanks for the rating!")
-                        st.rerun()
+            nudge_ids = {n['id'] for n in nudge_spots}
 
             for saved in saved_spots:
+                if saved['id'] in nudge_ids:
+                    st.markdown(
+                        '<div style="border-left:4px solid #f4a261;border-radius:6px;padding:8px 12px;background:#fff8f0;margin-bottom:4px;">'
+                        f'⭐ <b>How was your visit to {saved["spot_name"]}?</b> Tap to rate</div>',
+                        unsafe_allow_html=True
+                    )
                 icon = "🚫" if saved['rating'] == 1 else "📍"
                 with st.expander(f"{icon} {saved['spot_name']}"):
                     st.caption(saved['address'])
 
                     with st.form(f"rate_form_{saved['id']}"):
+                        _star_opts = ["★", "★★", "★★★", "★★★★", "★★★★★"]
                         current_rating = saved['rating'] if saved['rating'] else 3
-                        new_rating = st.slider("Rate this spot (1-5 Stars. 1 = Blacklist)", 1, 5, current_rating)
+                        new_rating_stars = st.select_slider("Rate this spot (★ = Blacklist)", options=_star_opts, value=_star_opts[current_rating - 1])
+                        new_rating = _star_opts.index(new_rating_stars) + 1
                         notes = st.text_input("Private Notes", value=saved.get('user_notes', ''))
 
                         if st.form_submit_button("Update Feedback", type="primary"):
