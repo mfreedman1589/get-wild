@@ -225,16 +225,12 @@ def submit_feedback(user_id, comment):
             "num_results":  len(results.get('recommendations', [])) if results else 0,
             "timed_out":    st.session_state.get('fetch_timed_out', False),
         }
-        payload = {
+        supabase.table('feedback').insert({
             'user_id': user_id,
             'screen': screen,
             'session_context': context,
             'comment': comment.strip(),
-        }
-        st.write(f"DEBUG user_id: {st.session_state.user.id}")
-        st.write(f"DEBUG auth.uid would be: {st.session_state.user.id}")
-        st.write(f"DEBUG insert payload: {payload}")
-        supabase.table('feedback').insert(payload).execute()
+        }).execute()
         return True
     except Exception as e:
         return str(e)
