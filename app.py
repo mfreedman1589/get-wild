@@ -542,23 +542,32 @@ def render_spot_card(spot, location_input, user_id, index, mode):
     email_url = f"mailto:?subject={urllib.parse.quote('Wild Plan: ' + spot['name'])}&body={encoded_share}"
     
     # Check fields in priority order: category → tier_name → why_its_perfect → name
-    _cat   = (spot.get('category', '') or '').lower()
-    _tier  = (spot.get('tier_name', '') or '').lower()
-    _why   = (spot.get('why_its_perfect', '') or '').lower()
-    _name  = (spot.get('name', '') or '').lower()
-    text_to_check = f"{_cat} {_tier} {_why} {_name}"
-    if "theater" in text_to_check or "cinema" in text_to_check or "film" in text_to_check or "movie" in text_to_check:
-        fallback_url = "https://images.unsplash.com/photo-1507676184212-d03ab07a01bf?w=800&q=80"
-    elif "music" in text_to_check or "concert" in text_to_check or "jazz" in text_to_check or "band" in text_to_check or "comedy" in text_to_check or "stand-up" in text_to_check:
-        fallback_url = "https://images.unsplash.com/photo-1540039155732-d68a96670afb?w=800&q=80"
-    elif "outdoor" in text_to_check or "park" in text_to_check or "garden" in text_to_check or "hike" in text_to_check or "trail" in text_to_check:
-        fallback_url = "https://images.unsplash.com/photo-1459749411175-04bf5292ceea?w=800&q=80"
-    elif "bar" in text_to_check or "brewery" in text_to_check or "cocktail" in text_to_check or "brew" in text_to_check or "wine" in text_to_check or "winery" in text_to_check:
+    text_to_check = " ".join([
+        (spot.get('name', '') or ''),
+        (spot.get('category', '') or ''),
+        (spot.get('tier_name', '') or ''),
+        (spot.get('why_its_perfect', '') or ''),
+    ]).lower()
+    if any(k in text_to_check for k in ["wine", "winery", "vineyard", "sommelier"]):
+        fallback_url = "https://images.unsplash.com/photo-1510812431401-41d2bd2722f3?w=800&q=80"
+    elif any(k in text_to_check for k in ["brewery", "brewing", "brewpub", "craft beer", "taproom"]):
         fallback_url = "https://images.unsplash.com/photo-1575367439058-6096bb9cf5e2?w=800&q=80"
-    elif "museum" in text_to_check or "art" in text_to_check or "gallery" in text_to_check:
+    elif any(k in text_to_check for k in ["cocktail", "speakeasy", "lounge", " bar", " pub"]):
+        fallback_url = "https://images.unsplash.com/photo-1575367439058-6096bb9cf5e2?w=800&q=80"
+    elif any(k in text_to_check for k in ["coffee", "cafe", "espresso", "tea"]):
+        fallback_url = "https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?w=800&q=80"
+    elif any(k in text_to_check for k in ["concert", "live music", "jazz", "band", "music venue", "performance"]):
+        fallback_url = "https://images.unsplash.com/photo-1540039155732-d68a96670afb?w=800&q=80"
+    elif any(k in text_to_check for k in ["theater", "comedy", "cinema", "show"]):
+        fallback_url = "https://images.unsplash.com/photo-1507676184212-d03ab07a01bf?w=800&q=80"
+    elif any(k in text_to_check for k in ["museum", "gallery", "art", "exhibit", "culture"]):
         fallback_url = "https://images.unsplash.com/photo-1554907984-15263bfd63bd?w=800&q=80"
-    elif "food" in text_to_check or "restaurant" in text_to_check or "dining" in text_to_check or "eat" in text_to_check:
+    elif any(k in text_to_check for k in ["park", "garden", "outdoor", "nature", "trail", "hiking"]):
+        fallback_url = "https://images.unsplash.com/photo-1459749411175-04bf5292ceea?w=800&q=80"
+    elif any(k in text_to_check for k in ["restaurant", "dining", "food", "bistro", "kitchen", "eatery"]):
         fallback_url = "https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=800&q=80"
+    elif any(k in text_to_check for k in ["bowling", "escape room", "arcade", "entertainment", "activity"]):
+        fallback_url = "https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=800&q=80"
     else:
         fallback_url = "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80"
 
@@ -580,7 +589,7 @@ def render_spot_card(spot, location_input, user_id, index, mode):
 {img_html}
 <div class="wild-card-content">
 <span class="spot-category" style="color:#d84315;">{spot.get('tier_name', 'Top Pick')}</span> • <span class="spot-category">{spot.get('category', '')}</span>
-<h2 style="font-size:1.5rem;font-weight:700;margin-top:0;margin-bottom:5px;color:#ffffff;">{title_prefix} {spot['name']}</h2>
+<h2 style="font-size:1.5rem;font-weight:700;margin-top:0;margin-bottom:5px;color:#1a1a1a;">{title_prefix} {spot['name']}</h2>
 <div class="spot-meta">📍 {spot['address']} | ✨ <b>{spot['vibe_check']}</b></div>
 <div>{tags_html}</div>
 <p class="spot-pitch">{spot['why_its_perfect']}</p>
@@ -897,7 +906,6 @@ else:
                     render_spot_card(spot, st.session_state.mem_loc, st.session_state.user.id, index + 1, mode)
                     
                 # --- SHUFFLE BUTTON (ONLY IN TOP 3 MODE) ---
-                st.write(f"DEBUG excluded: {st.session_state.session_seen_spots}")
                 if mode == "top_3":
                     st.write("---")
                     if st.button("🔀 Shuffle", use_container_width=True):
