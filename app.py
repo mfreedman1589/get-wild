@@ -64,6 +64,7 @@ custom_css = """
     .wild-card-content { padding: 20px; }
     .spot-category { color: #558b2f; font-weight: 700; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 1px; margin-bottom: 5px; display: block; }
     .spot-title { font-size: 1.5rem; font-weight: 700; color: #1a1a1a; margin-top: 0; margin-bottom: 5px; }
+    .card-title { font-size: 1.5rem; font-weight: 700; color: #1a1a1a; margin-top: 0; margin-bottom: 5px; }
     .spot-meta { font-size: 0.9rem; color: #666; margin-bottom: 15px; }
     .spot-pitch { font-size: 1.05rem; line-height: 1.5; color: #333; margin-bottom: 20px; }
     
@@ -75,11 +76,12 @@ custom_css = """
     
     @keyframes fadeSlideUp { from {opacity: 0; transform: translateY(20px);} to { opacity: 1; transform: translateY(0); } }
 
-    /* Dark mode: only fix form input labels — let Streamlit handle everything else */
+    /* Dark mode: fix form input labels and card titles */
     @media (prefers-color-scheme: dark) {
         .stTextInput > label, .stSelectbox > label, .stRadio > label,
         .stCheckbox > label, .stTextArea > label, .stMultiSelect > label,
         .stSlider > label, .stNumberInput > label { color: #f0f0f0 !important; }
+        .card-title { color: #f0f0f0 !important; }
     }
 </style>
 """
@@ -527,8 +529,11 @@ def render_spot_card(spot, location_input, user_id, index, mode):
 
     # Generate visual tag pills based on what the AI learned
     tags_html = ""
-    if spot.get('matched_tags'):
-        for tag in spot['matched_tags']:
+    matched_tags = spot.get('matched_tags')
+    if matched_tags:
+        if isinstance(matched_tags, str):
+            matched_tags = [t.strip() for t in matched_tags.split(',') if t.strip()]
+        for tag in matched_tags:
             tags_html += f'<span class="tag-pill">✓ {tag}</span>'
 
     html_card = f"""
@@ -536,7 +541,7 @@ def render_spot_card(spot, location_input, user_id, index, mode):
 {img_html}
 <div class="wild-card-content">
 <span class="spot-category" style="color:#d84315;">{spot.get('tier_name', 'Top Pick')}</span> • <span class="spot-category">{spot.get('category', '')}</span>
-<h2 class="spot-title">{title_prefix} {spot['name']}</h2>
+<h2 class="card-title">{title_prefix} {spot['name']}</h2>
 <div class="spot-meta">📍 {spot['address']} | ✨ <b>{spot['vibe_check']}</b></div>
 <div>{tags_html}</div>
 <p class="spot-pitch">{spot['why_its_perfect']}</p>
