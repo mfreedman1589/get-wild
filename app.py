@@ -167,6 +167,23 @@ def delete_spot_from_db(spot_id):
         st.error(f"Database error while deleting: {e}")
         return False
 
+def increment_wild_counter(city):
+    try:
+        today = datetime.utcnow().date().isoformat()
+        supabase.rpc('increment_wild_counter', {'p_date': today, 'p_city': city}).execute()
+    except:
+        pass
+
+def get_wild_count_today():
+    try:
+        today = datetime.utcnow().date().isoformat()
+        res = supabase.table('wild_counter').select('count').eq('date', today).execute()
+        if res.data:
+            return sum(row['count'] for row in res.data)
+        return 0
+    except:
+        return None
+
 # ==========================================
 # 4. HELPER FUNCTIONS (The Engine)
 # ==========================================
@@ -679,7 +696,9 @@ else:
                     }
                     st.session_state.search_active = True
                     st.session_state.trigger_fetch = True
-                    st.session_state.session_seen_spots = [] 
+                    st.session_state.session_seen_spots = []
+                    city = "Nearby" if st.session_state.mem_gps_active else (ui_loc.split()[0].rstrip(',') if ui_loc else "Unknown")
+                    increment_wild_counter(city)
                     st.rerun()
 
         # --- SCREEN 2: THE RESULTS & LOADER ---
@@ -815,6 +834,10 @@ else:
                         st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip={"html": "<b>{name}</b>"}))
                 
                 # --- RENDER CARDS ---
+                wild_count = get_wild_count_today()
+                if wild_count:
+                    st.markdown(f"**🔥 {wild_count} {'person' if wild_count == 1 else 'people'} got wild today**")
+
                 for index, spot in enumerate(results.get("recommendations", [])):
                     render_spot_card(spot, st.session_state.mem_loc, st.session_state.user.id, index + 1, mode)
                     
