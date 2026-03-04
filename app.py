@@ -85,6 +85,7 @@ if 'session_seen_spots' not in st.session_state: st.session_state.session_seen_s
 if 'search_active' not in st.session_state: st.session_state.search_active = False
 if 'trigger_fetch' not in st.session_state: st.session_state.trigger_fetch = False
 if 'saved_spots_dirty' not in st.session_state: st.session_state.saved_spots_dirty = False
+if 'fetch_timed_out' not in st.session_state: st.session_state.fetch_timed_out = False
 
 # Persistent memory state variables
 if 'mem_loc' not in st.session_state: st.session_state.mem_loc = ""
@@ -224,16 +225,22 @@ def build_semantic_query(filters_dict, profile):
     modifier_str = " ".join(modifiers)
     
     # Always keep a strong base category so Google doesn't return random offices/services
+    no_food = filters_dict['food'] == "No Food Needed"
     if filters_dict['vibe'] == "Outside":
         if filters_dict['food'] == "Full Meal": base = "restaurants with nice patios"
         elif filters_dict['food'] == "Just Drinks/Coffee": base = "wineries, cocktail bars with patios, or upscale breweries"
-        else: base = "botanical gardens, scenic views, or parks"
+        else: base = "parks, botanical gardens, hiking trails, scenic outdoor activities, nature reserves"
+    elif filters_dict['vibe'] == "Inside":
+        if filters_dict['food'] == "Full Meal": base = "highly rated restaurants"
+        elif filters_dict['food'] == "Just Drinks/Coffee": base = "wine bars, speakeasies, or lounges"
+        else: base = "museums, art galleries, science centers, escape rooms, bowling alleys, entertainment venues, unique attractions"
     else:
         if filters_dict['food'] == "Full Meal": base = "highly rated restaurants"
         elif filters_dict['food'] == "Just Drinks/Coffee": base = "wine bars, speakeasies, or lounges"
-        else: base = "entertainment, museums, or unique attractions"
-            
-    return f"{modifier_str} {base}".strip()
+        else: base = "museums, parks, entertainment venues, unique attractions, or outdoor experiences"
+
+    exclusion = " NOT bar NOT brewery NOT restaurant NOT cafe" if no_food else ""
+    return f"{modifier_str} {base}{exclusion}".strip()
 
 def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
     url = "https://places.googleapis.com/v1/places:searchText"
@@ -376,8 +383,11 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
         stroller = "MUST be stroller accessible." if profile.get('needs_stroller_access') else ""
         dog = "MUST be dog-friendly." if profile.get('needs_dog_friendly') and filters_dict['vibe'] == "Outside" else ""
         vibe_pref = f"Prioritize locations matching this vibe: {profile.get('vibe_preference')}." if profile.get('vibe_preference') else ""
+        nonalc = "NEVER recommend bars, breweries, cocktail bars, or any alcohol-focused venue." if profile.get('needs_nonalcoholic') else ""
+        restrictions = profile.get('dietary_restrictions', '')
+        dietary = f"User dietary restrictions: {restrictions}. Only recommend venues that can accommodate these." if restrictions and restrictions.strip() else ""
         history_context = f"\nUSER'S HISTORICAL FAVORITES (Learn from their taste!): {', '.join(favorite_spots)}" if favorite_spots else ""
-        profile_context = f"\nUSER BASELINE PROFILE:\n{stroller}\n{dog}\n{vibe_pref}{history_context}"
+        profile_context = f"\nUSER BASELINE PROFILE:\n{stroller}\n{dog}\n{vibe_pref}\n{nonalc}\n{dietary}{history_context}"
 
     blacklist_context = f"CRITICAL: DO NOT RECOMMEND ANY OF THESE PLACES: {', '.join(excluded_spots)}" if excluded_spots else ""
 
@@ -670,7 +680,8 @@ else:
                 
             if st.session_state.trigger_fetch:
                 st.session_state.trigger_fetch = False
-                
+                st.session_state.fetch_timed_out = False
+
                 status_loader = st.empty()
                 status_loader.info("📍 Locking in coordinates...")
                 
@@ -752,8 +763,15 @@ else:
                 except Exception as e:
                     if isinstance(e, TimeoutError):
                         status_loader.error("Taking longer than usual, please try again.")
+                        st.session_state.fetch_timed_out = True
                     else:
                         status_loader.error(f"Error connecting to the wild. Try again! ({type(e).__name__})")
+
+            if st.session_state.fetch_timed_out:
+                def _retry():
+                    st.session_state.fetch_timed_out = False
+                    st.session_state.trigger_fetch = True
+                st.button("🔄 Try Again", on_click=_retry, type="primary", key="retry_timeout_btn")
 
             if st.session_state.current_results:
                 st.write("---")
@@ -808,11 +826,18 @@ else:
             stroller = st.checkbox("Require Stroller Accessibility", value=current_prof.get('needs_stroller_access', False))
             dog = st.checkbox("Require Dog-Friendly Patios", value=current_prof.get('needs_dog_friendly', False))
             vibe_pref = st.text_area("What is your ideal aesthetic? (e.g., 'Warm, modern, naturalistic')", value=current_prof.get('vibe_preference', ''))
-            
+            alcohol_choice = st.radio("Alcohol Preference", ["Drinks Alcohol", "Non-Alcoholic Only"],
+                index=1 if current_prof.get('needs_nonalcoholic', False) else 0)
+            dietary_options = ["Vegan", "Vegetarian", "Gluten-Free", "Nut Allergy", "Halal", "Kosher"]
+            current_dietary = [r.strip() for r in current_prof.get('dietary_restrictions', '').split(',') if r.strip()]
+            dietary = st.multiselect("Dietary Restrictions", dietary_options, default=[d for d in current_dietary if d in dietary_options])
+
             if st.form_submit_button("Save Profile", type="primary"):
                 supabase.table('user_profiles').upsert({
                     'id': st.session_state.user.id, 'first_name': fname, 'partner_name': pname,
-                    'needs_stroller_access': stroller, 'needs_dog_friendly': dog, 'vibe_preference': vibe_pref
+                    'needs_stroller_access': stroller, 'needs_dog_friendly': dog, 'vibe_preference': vibe_pref,
+                    'needs_nonalcoholic': alcohol_choice == "Non-Alcoholic Only",
+                    'dietary_restrictions': ', '.join(dietary)
                 }).execute()
                 st.success("Your preferences have been locked in.")
                 
