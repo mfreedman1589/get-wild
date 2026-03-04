@@ -520,11 +520,12 @@ def render_spot_card(spot, location_input, user_id, index, mode):
     else:
         fallback_url = "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80"
 
+    st.write(f"DEBUG photo_ref: {spot.get('photo_ref')}")
     if spot.get('photo_ref'):
         img_url = f"https://places.googleapis.com/v1/{spot['photo_ref']}/media?key={GOOGLE_API_KEY}&maxHeightPx=400&maxWidthPx=800"
     else:
         img_url = fallback_url
-    img_html = f'<img src="{img_url}" class="wild-card-img">'
+    img_html = f'<img src="{img_url}" class="wild-card-img" alt="">'
     website_icon = f'<a href="{spot["website"]}" target="_blank" class="icon-btn" title="Visit Website">🌐</a>' if spot.get('website') else ""
 
     # Generate visual tag pills based on what the AI learned
