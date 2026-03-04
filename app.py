@@ -178,13 +178,11 @@ def delete_spot_from_db(spot_id):
         return False
 
 def increment_wild_counter(city):
-    st.write(f"DEBUG increment called with city: {city}")
     try:
         today = datetime.utcnow().date().isoformat()
-        response = supabase.rpc('increment_wild_counter', {'p_search_date': today, 'p_city': city}).execute()
-        st.write(f"DEBUG RPC response: {response}")
-    except Exception as e:
-        st.write(f"DEBUG increment error: {e}")
+        supabase.rpc('increment_wild_counter', {'p_search_date': today, 'p_city': city}).execute()
+    except:
+        pass
 
 def get_wild_count_today():
     try:
@@ -848,7 +846,6 @@ else:
                 
                 # --- RENDER CARDS ---
                 wild_count = get_wild_count_today()
-                st.write(f"DEBUG counter: {wild_count}")
                 if wild_count:
                     st.markdown(f"**🔥 {wild_count} {'person' if wild_count == 1 else 'people'} got wild today**")
 
