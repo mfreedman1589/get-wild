@@ -59,9 +59,8 @@ custom_css = """
     .hero-title { color: #2e7d32; font-family: 'Helvetica Neue', sans-serif; font-size: 3.5rem; font-weight: 800; letter-spacing: -1px; text-transform: uppercase; margin-bottom: 0; line-height: 1.1; }
     .hero-subtitle { color: #558b2f; font-size: 1.2rem; font-weight: 400; letter-spacing: 1px; margin-top: 10px; }
 
-    /* CARD — per-card <style> injection (in render_spot_card) handles border/shadow.
-       .wc-shell is structural only (image overflow clipping). */
-    .wc-shell { overflow: hidden; }
+    /* CARD */
+    .wc-shell { overflow: hidden; animation: fadeSlideUp 0.5s ease-out forwards; }
 
     /* Card inner content */
     .wc-img-wrap { position: relative; width: 100%; height: 200px; overflow: hidden; }
@@ -457,7 +456,7 @@ def fetch_live_events(location_name, intended_time, group_type, target_date_str,
         return []
 
 @retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3), retry=retry_if_not_exception_type(TimeoutError))
-def get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_name, target_date_str, relative_day, profile, excluded_spots, favorite_spots, mode="top_3", tier_personalities=None):
+def get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_name, target_date_str, relative_day, profile, excluded_spots, favorite_spots, mode="top_3", tier_personalities=None, lat=None, lng=None, radius_miles=20):
     client = OpenAI(api_key=OPENAI_API_KEY)
     
     trimmed_places = raw_places[:8] if isinstance(raw_places, list) and len(raw_places) > 8 else raw_places
@@ -512,7 +511,7 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
 CONTEXT: {location_name} | {weather_report} | {target_date_str} ({relative_day}) | {filters_dict['time']} | {filters_dict['group']}, {filters_dict['food']}, {filters_dict['vibe']}
 {profile_context}{blacklist_context}
 RULES:
-1. GEOGRAPHY: All picks within 20 miles of {location_name}. Discard anything outside.
+1. STRICT GEOGRAPHY: Search center is {location_name}{f" (lat={lat:.4f}, lng={lng:.4f})" if lat and lng else ""}. Every recommendation MUST be within {radius_miles} miles of this point. Distant cities (e.g., Virginia Beach when searching near DC, or Ocean City when searching in Northern VA) are NOT nearby — skip them entirely and use a Google Places result instead. If an event venue is more than {radius_miles} miles away, discard it.
 2. EVENTS: Only use events with date_verified=True on {relative_day} ({target_date_str}). why_its_perfect must include venue name and address. If no verified events exist, use Places data only — never fabricate event details.
 {weather_rule}
 4. NO HALLUCINATION: Use exact addresses and URLs from input data. Never invent.
@@ -645,29 +644,20 @@ def render_spot_card(spot, location_input, user_id, index, mode):
         f'</div>'
     )
 
-    # Per-card injected style: targets the st.container() stVerticalBlock
-    # that immediately follows the stMarkdown containing the anchor div.
-    anchor_id = f"wca{index}"
+    # GET WILD: inject anchor + green glow CSS targeting the native border wrapper
     if mode == "get_wild":
-        border_css  = "2px solid #2d6a4f"
-        shadow_css  = "0 0 20px rgba(45,106,79,0.4),0 0 40px rgba(45,106,79,0.2)"
-        anim_css    = "fadeSlideUp 0.5s ease-out,wildGlow 3s ease-in-out 0.5s infinite"
-        dark_border = "#2d6a4f"
-        header_html = '<p style="color:#2d6a4f;font-weight:700;font-size:1.05rem;margin:8px 0 4px 0;">🎲 Your Wild Adventure Awaits</p>'
-    else:
-        border_css  = "1px solid #e0e0e0"
-        shadow_css  = "0 2px 12px rgba(0,0,0,0.08)"
-        anim_css    = "fadeSlideUp 0.5s ease-out forwards"
-        dark_border = "#333"
-        header_html = ""
-    st.markdown(
-        f'<style>'
-        f'div:has(#{anchor_id})+div[data-testid="stVerticalBlock"]{{border:{border_css};border-radius:12px;box-shadow:{shadow_css};overflow:hidden;background:#fff;margin:0 0 24px 0;gap:0!important;animation:{anim_css}}}'
-        f'div:has(#{anchor_id})+div[data-testid="stVerticalBlock"] [data-testid="stHorizontalBlock"]{{border-top:1px solid #f0f0f0;padding:8px 16px 12px}}'
-        f'@media(prefers-color-scheme:dark){{div:has(#{anchor_id})+div[data-testid="stVerticalBlock"]{{background:#1e1e1e!important;border-color:{dark_border}!important}}div:has(#{anchor_id})+div[data-testid="stVerticalBlock"] [data-testid="stHorizontalBlock"]{{background:#1e1e1e!important;border-top-color:#333!important}}}}'
-        f'</style>{header_html}<div id="{anchor_id}"></div>',
-        unsafe_allow_html=True
-    )
+        st.markdown(
+            '<style>'
+            'div:has(#wca-wild)+[data-testid="stVerticalBlockBorderWrapper"]{'
+            'border-color:#2d6a4f!important;'
+            'box-shadow:0 0 20px rgba(45,106,79,0.4),0 0 40px rgba(45,106,79,0.2)!important;'
+            'animation:wildGlow 3s ease-in-out infinite!important;'
+            '}'
+            '</style>'
+            '<p style="color:#2d6a4f;font-weight:700;font-size:1.05rem;margin:8px 0 4px 0;">🎲 Your Wild Adventure Awaits</p>'
+            '<div id="wca-wild"></div>',
+            unsafe_allow_html=True
+        )
 
     html_card = f"""<div class="wc-shell">
   <div class="wc-img-wrap">
@@ -685,7 +675,7 @@ def render_spot_card(spot, location_input, user_id, index, mode):
   </div>
 </div>
 """
-    with st.container():
+    with st.container(border=True):
         st.markdown(html_card, unsafe_allow_html=True)
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -929,7 +919,8 @@ else:
                                 st.session_state.filters_dict, location_context,
                                 target_date_str, relative_day, user_profile, all_excluded,
                                 user_favorites, mode=st.session_state.current_mode,
-                                tier_personalities=selected_tiers
+                                tier_personalities=selected_tiers,
+                                lat=lat, lng=lng, radius_miles=st.session_state.mem_dist
                             )
                             match_photos_to_results(ai_results.get('recommendations', []), raw_places)
                             st.session_state.current_results = ai_results
@@ -988,7 +979,12 @@ else:
                         )
                         view_state = pdk.ViewState(latitude=map_data[0]['lat'], longitude=map_data[0]['lon'], zoom=12)
                         st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip={"html": "<b>{name}</b>"}))
-                        st.caption("📍 Tap any pin to see details • Use 🗺️ on each card to open in Google Maps")
+                        num_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
+                        map_btn_cols = st.columns(len(map_data))
+                        for i, (col, item) in enumerate(zip(map_btn_cols, map_data)):
+                            with col:
+                                emoji = num_emojis[i] if i < len(num_emojis) else f"{i+1}."
+                                st.link_button(f"{emoji} Open in Maps", item['map_url'], use_container_width=True)
                 
                 # --- RENDER CARDS ---
                 for index, spot in enumerate(results.get("recommendations", [])):
