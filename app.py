@@ -170,14 +170,14 @@ def delete_spot_from_db(spot_id):
 def increment_wild_counter(city):
     try:
         today = datetime.utcnow().date().isoformat()
-        supabase.rpc('increment_wild_counter', {'p_date': today, 'p_city': city}).execute()
+        supabase.rpc('increment_wild_counter', {'p_search_date': today, 'p_city': city}).execute()
     except:
         pass
 
 def get_wild_count_today():
     try:
         today = datetime.utcnow().date().isoformat()
-        res = supabase.table('wild_counter').select('count').eq('date', today).execute()
+        res = supabase.table('wild_counter').select('count').eq('search_date', today).execute()
         if res.data:
             return sum(row['count'] for row in res.data)
         return 0
