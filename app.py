@@ -34,6 +34,21 @@ TIER_PERSONALITIES = [
 
 CACHE_VERSION = "v2"
 
+BADGE_DEFINITIONS = [
+    {"id": "explorer",      "name": "Explorer",          "emoji": "🧭", "pts": 5,
+     "desc": "Save your first spot"},
+    {"id": "trailblazer",   "name": "Trailblazer",       "emoji": "🥾", "pts": 10,
+     "desc": "Save spots across 5 different categories"},
+    {"id": "wild_at_heart", "name": "Wild at Heart",     "emoji": "💚", "pts": 25,
+     "desc": "10 chosen outings"},
+    {"id": "foodie",        "name": "Foodie",            "emoji": "🍽️", "pts": 10,
+     "desc": "5 restaurant/dining spots rated 4+ stars"},
+    {"id": "night_owl",     "name": "Night Owl",         "emoji": "🦉", "pts": 10,
+     "desc": "Save 3 bar, lounge, or brewery spots"},
+    {"id": "hidden_gem",    "name": "Hidden Gem Hunter", "emoji": "💎", "pts": 20,
+     "desc": "Save 5 Hidden Gem tier spots"},
+]
+
 GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 TICKETMASTER_API_KEY = st.secrets["TICKETMASTER_API_KEY"]
@@ -194,6 +209,64 @@ def delete_spot_from_db(spot_id):
     except Exception as e:
         st.error(f"Database error while deleting: {e}")
         return False
+
+def get_user_points(user_id):
+    try:
+        res = supabase.table('user_profiles').select('points').eq('id', user_id).execute()
+        return (res.data[0].get('points') or 0) if res.data else 0
+    except:
+        return 0
+
+def award_points(user_id, action_type, points, description):
+    try:
+        supabase.table('points_ledger').insert({
+            'user_id': user_id,
+            'action_type': action_type,
+            'points_earned': points,
+            'description': description,
+        }).execute()
+        supabase.rpc('increment_user_points', {'p_user_id': user_id, 'p_points': points}).execute()
+        return get_user_points(user_id)
+    except:
+        return None
+
+def check_and_award_badges(user_id):
+    try:
+        spots = supabase.table('saved_spots').select('*').eq('user_id', user_id).execute().data or []
+        earned = {b['badge_id'] for b in (supabase.table('badges').select('badge_id').eq('user_id', user_id).execute().data or [])}
+
+        for badge in BADGE_DEFINITIONS:
+            if badge['id'] in earned:
+                continue
+            bid = badge['id']
+            unlocked = False
+
+            if bid == 'explorer':
+                unlocked = len(spots) >= 1
+            elif bid == 'trailblazer':
+                unlocked = len({s.get('category', '') for s in spots if s.get('category')}) >= 5
+            elif bid == 'wild_at_heart':
+                unlocked = len([s for s in spots if 'chosen' in (s.get('user_notes') or '') or (s.get('rating') or 0) > 0]) >= 10
+            elif bid == 'foodie':
+                unlocked = len([s for s in spots if any(k in (s.get('category') or '').lower() for k in ['restaurant', 'dining', 'food', 'bistro', 'kitchen']) and (s.get('rating') or 0) >= 4]) >= 5
+            elif bid == 'night_owl':
+                unlocked = len([s for s in spots if any(k in (s.get('category') or '').lower() for k in ['bar', 'lounge', 'brewery'])]) >= 3
+            elif bid == 'hidden_gem':
+                unlocked = len([s for s in spots if 'hidden gem' in (s.get('user_notes') or '').lower() or 'hidden gem' in (s.get('category') or '').lower()]) >= 5
+
+            if unlocked:
+                try:
+                    supabase.table('badges').insert({
+                        'user_id': user_id, 'badge_id': bid,
+                        'badge_name': badge['name'], 'badge_emoji': badge['emoji'],
+                    }).execute()
+                    award_points(user_id, 'badge', badge['pts'], f"Badge: {badge['name']}")
+                    st.balloons()
+                    st.success(f"🏆 Badge Unlocked: {badge['emoji']} {badge['name']}! +{badge['pts']} bonus points")
+                except:
+                    pass
+    except:
+        pass
 
 def submit_feedback(user_id, comment):
     if not comment.strip():
@@ -819,9 +892,13 @@ def render_spot_card(spot, location_input, user_id, index, mode):
         with col1:
             if st.button("⭐ Save", key=f"save_{index}_{spot['name']}", use_container_width=True, help="Save for later"):
                 save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'))
+                award_points(user_id, "save", 1, "Saved a spot")
+                check_and_award_badges(user_id)
         with col2:
             if st.button("✅ I'm Going", key=f"going_{index}_{spot['name']}", use_container_width=True, type="primary", help="Mark as chosen"):
                 save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'), notes="chosen")
+                award_points(user_id, "going", 5, "Chose an outing")
+                check_and_award_badges(user_id)
         with col3:
             if st.button("👎 Not for me", key=f"nope_{index}_{spot['name']}", use_container_width=True, help="Never suggest this again"):
                 save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'), rating=1, notes="Blacklisted via quick-button.")
@@ -1204,8 +1281,44 @@ else:
     # ----------------------------------------
     with tab_profile:
         current_prof = get_profile(st.session_state.user.id) or {}
-        st.markdown(f"### 🏆 Get Wild Tally: **{current_prof.get('wild_tally', 0)}**")
-        st.write("Save spots to increase your tally and build your exploration streak!")
+        user_points  = get_user_points(st.session_state.user.id)
+
+        st.markdown(f"## ⚡ {user_points} Wild Points")
+        st.markdown(f"**🏆 Get Wild Tally: {current_prof.get('wild_tally', 0)}**")
+
+        # Badges
+        st.write("---")
+        st.subheader("Your Badges")
+        try:
+            earned_badges = supabase.table('badges').select('*').eq('user_id', st.session_state.user.id).execute().data or []
+        except:
+            earned_badges = []
+
+        if not earned_badges:
+            st.info("No badges yet — get out there! 🌿")
+        else:
+            badge_cols = st.columns(min(len(earned_badges), 4))
+            for i, b in enumerate(earned_badges):
+                with badge_cols[i % 4]:
+                    st.markdown(
+                        f"<div style='text-align:center;font-size:2rem;line-height:1.2'>{b['badge_emoji']}</div>"
+                        f"<div style='text-align:center;font-size:0.75rem;font-weight:600;margin-top:2px'>{b['badge_name']}</div>",
+                        unsafe_allow_html=True
+                    )
+
+        with st.expander("How to earn points"):
+            st.markdown("""
+- **Save a spot** ⭐ → +1 pt
+- **Choose an outing** (I'm Going) ✅ → +5 pts
+- **Rate a visit 4-5 stars** → +1 pt
+- **Explorer** 🧭 — First saved spot → +5 bonus pts
+- **Trailblazer** 🥾 — 5 saves across different categories → +10 bonus pts
+- **Wild at Heart** 💚 — 10 chosen outings → +25 bonus pts
+- **Foodie** 🍽️ — 5 dining spots rated 4+ stars → +10 bonus pts
+- **Night Owl** 🦉 — 3 bar/lounge/brewery spots saved → +10 bonus pts
+- **Hidden Gem Hunter** 💎 — 5 Hidden Gem tier spots → +20 bonus pts
+            """)
+
         st.write("---")
         st.subheader("Personalize Your Profile")
         st.write("Set your baseline preferences so the app learns how you like to explore.")
@@ -1286,6 +1399,8 @@ else:
 
                         if st.form_submit_button("Update Feedback", type="primary"):
                             supabase.table('saved_spots').update({'rating': new_rating, 'user_notes': notes}).eq('id', saved['id']).execute()
+                            if new_rating >= 4:
+                                award_points(st.session_state.user.id, "rating", 1, "Rated a visit")
                             st.success("Feedback saved!")
                             st.session_state.saved_spots_dirty = True
                             st.rerun()
