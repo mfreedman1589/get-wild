@@ -197,6 +197,44 @@ def delete_spot_from_db(spot_id):
         st.error(f"Database error while deleting: {e}")
         return False
 
+def submit_feedback(user_id, comment):
+    if not comment.strip():
+        return False
+    try:
+        if not st.session_state.get('user'):
+            screen = "login"
+        elif st.session_state.get('show_onboarding'):
+            screen = "onboarding"
+        elif not st.session_state.get('search_active'):
+            screen = "input"
+        elif st.session_state.get('current_results'):
+            screen = "results"
+        else:
+            screen = "loading"
+        results = st.session_state.get('current_results')
+        context = {
+            "mem_loc":      st.session_state.get('mem_loc', ''),
+            "mem_day":      st.session_state.get('mem_day', ''),
+            "mem_time":     st.session_state.get('mem_time', ''),
+            "mem_group":    st.session_state.get('mem_group', ''),
+            "mem_vibe":     st.session_state.get('mem_vibe', ''),
+            "mem_food":     st.session_state.get('mem_food', ''),
+            "mem_dist":     st.session_state.get('mem_dist', 5),
+            "mem_spec":     st.session_state.get('mem_spec', ''),
+            "current_mode": st.session_state.get('current_mode'),
+            "num_results":  len(results.get('recommendations', [])) if results else 0,
+            "timed_out":    st.session_state.get('fetch_timed_out', False),
+        }
+        supabase.table('feedback').insert({
+            'user_id': user_id,
+            'screen': screen,
+            'session_context': context,
+            'comment': comment.strip(),
+        }).execute()
+        return True
+    except:
+        return False
+
 def increment_wild_counter(city):
     try:
         today = datetime.utcnow().date().isoformat()
@@ -751,12 +789,26 @@ async def gather_all_data(lat, lng, semantic_query, distance, location_input, in
 # ==========================================
 # 6. UI ROUTING
 # ==========================================
-st.markdown("""
+_hero_col, _fb_col = st.columns([9, 1])
+with _hero_col:
+    st.markdown("""
 <div class="hero-header">
     <h1 class="hero-title">Get Wild</h1>
     <p class="hero-subtitle">Disconnect. Explore. Connect.</p>
 </div>
 """, unsafe_allow_html=True)
+with _fb_col:
+    st.write("")  # vertical nudge to align with header
+    _fb_user_id = st.session_state.user.id if st.session_state.get('user') else None
+    with st.popover("💬", help="Send feedback"):
+        st.markdown("**What's on your mind?**")
+        st.caption("Bug, idea, or general feedback — we read everything.")
+        _fb_comment = st.text_area("", placeholder="Type here...", label_visibility="collapsed", key="fb_textarea")
+        if st.button("Send Feedback", type="primary", use_container_width=True, key="fb_submit"):
+            if submit_feedback(_fb_user_id, _fb_comment):
+                st.toast("✅ Feedback sent! Thank you.")
+            else:
+                st.error("Please write something before sending.")
 
 if st.session_state.user is None:
     st.write("---")
