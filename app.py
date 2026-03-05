@@ -165,6 +165,7 @@ if 'fetch_timed_out' not in st.session_state: st.session_state.fetch_timed_out =
 if 'skip_cache' not in st.session_state: st.session_state.skip_cache = False
 if 'show_onboarding' not in st.session_state: st.session_state.show_onboarding = False
 if 'wild_idea_dismissed' not in st.session_state: st.session_state.wild_idea_dismissed = False
+if 'wild_idea_expanded' not in st.session_state: st.session_state.wild_idea_expanded = False
 if 'show_welcome_bonus' not in st.session_state: st.session_state.show_welcome_bonus = False
 if 'referral_code' not in st.session_state:
     st.session_state.referral_code = st.query_params.get("ref", "")
@@ -869,10 +870,13 @@ def fetch_live_events(lat, lng, radius_miles, target_date_str, specific_keyword=
     except:
         return []
 
-def _should_show_wild_idea(user_profile):
-    """All conditions must be true for the banner to render."""
-    if st.session_state.get('wild_idea_dismissed'):
-        return False
+def _should_show_wild_idea_teaser():
+    """Show the teaser banner whenever not dismissed this session.
+    No cooldown check — only generation is cooldown-gated."""
+    return not st.session_state.get('wild_idea_dismissed')
+
+def _should_generate_wild_idea(user_profile):
+    """Full check: has location AND hasn't been generated in 4 h."""
     if not st.session_state.get('mem_gps_active') and not st.session_state.get('mem_loc'):
         return False
     last_str = (user_profile or {}).get('last_wild_idea_at')
@@ -951,6 +955,14 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
             raw_places = [p for p in raw_places if p.get('priceLevel') not in _PAID_LEVELS]
         elif _spend_filter == "✨ Splurge":
             raw_places = sorted(raw_places, key=lambda p: 0 if p.get('priceLevel') in _PREMIUM_LEVELS else 1)
+    # Pre-filter: remove already-seen/excluded venues so AI never sees them in its pool
+    if excluded_spots and isinstance(raw_places, list):
+        _excl_lower = {s.lower().strip() for s in excluded_spots}
+        raw_places = [
+            p for p in raw_places
+            if not any(ex in (p.get('displayName', {}).get('text', '') or '').lower()
+                       for ex in _excl_lower)
+        ]
     trimmed_places = raw_places[:8] if isinstance(raw_places, list) and len(raw_places) > 8 else raw_places
     if isinstance(live_events_data, list):
         safe_events_data = live_events_data[:6]
@@ -970,7 +982,11 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
         history_context = f"\nUSER'S HISTORICAL FAVORITES (Learn from their taste!): {', '.join(favorite_spots)}" if favorite_spots else ""
         profile_context = f"\nUSER BASELINE PROFILE:\n{stroller}\n{dog}\n{vibe_pref}\n{nonalc}\n{dietary}{history_context}"
 
-    blacklist_context = f"CRITICAL: DO NOT RECOMMEND ANY OF THESE PLACES: {', '.join(excluded_spots)}" if excluded_spots else ""
+    blacklist_context = (
+        f"⚠️ HARD EXCLUSION — These venues have already been shown or saved. "
+        f"They are BANNED from your output. Do NOT recommend them under any circumstances: "
+        f"{', '.join(excluded_spots)}"
+    ) if excluded_spots else ""
 
     taste_context = ""
     if preference_scores and preference_scores.get('rated_count', 0) >= 2:
@@ -1643,57 +1659,102 @@ else:
         if not st.session_state.search_active:
 
             # ---- HERE'S A WILD IDEA BANNER ----
-            if _should_show_wild_idea(user_profile):
-                _wi_lat, _wi_lng, _wi_loc = None, None, ""
-                if st.session_state.mem_gps_active and st.session_state.mem_geo_data:
-                    _wi_lat = st.session_state.mem_geo_data['latitude']
-                    _wi_lng = st.session_state.mem_geo_data['longitude']
-                    _wi_loc = "your current location"
-                elif st.session_state.mem_loc:
-                    _wi_lat, _wi_lng = get_coordinates(st.session_state.mem_loc)
-                    _wi_loc = st.session_state.mem_loc
+            if _should_show_wild_idea_teaser():
+                _has_location = st.session_state.get('mem_gps_active') or bool(st.session_state.get('mem_loc', ''))
 
-                if _wi_lat:
-                    _prof_parts = []
-                    if user_profile:
-                        if user_profile.get('vibe_preference'): _prof_parts.append(user_profile['vibe_preference'])
-                        if user_profile.get('needs_nonalcoholic'): _prof_parts.append("non-alcoholic")
-                        if user_profile.get('dietary_restrictions'): _prof_parts.append(user_profile['dietary_restrictions'])
-                    _prof_summary = ", ".join(_prof_parts) if _prof_parts else "no specific preferences"
+                if not _has_location:
+                    # Greyed out — no location yet
+                    st.markdown(
+                        '<div style="background:#e5e7eb;color:#9ca3af;border-radius:24px;padding:10px 20px;'
+                        'text-align:center;font-size:0.9rem;font-weight:600;margin-bottom:10px;user-select:none;">'
+                        '💡 Search somewhere to unlock your Wild Idea →</div>',
+                        unsafe_allow_html=True)
 
-                    _idea = get_wild_idea(
-                        str(st.session_state.user.id), _wi_lat, _wi_lng, _wi_loc, _prof_summary
-                    )
-                    if _idea:
-                        st.markdown(f"""
+                elif not st.session_state.get('wild_idea_expanded'):
+                    # Collapsed green teaser — pulsing pill button
+                    st.markdown("""<style>
+@keyframes wi-pulse{0%,100%{opacity:1}50%{opacity:0.78}}
+.wi-teaser-anchor+div .stButton>button{
+    background:linear-gradient(90deg,#2d6a4f,#52b788)!important;
+    color:white!important;border:none!important;border-radius:24px!important;
+    font-weight:700!important;font-size:0.94rem!important;letter-spacing:0.02em!important;
+    animation:wi-pulse 2.5s ease-in-out infinite!important;
+    padding:11px 20px!important;
+}
+.wi-teaser-anchor+div .stButton>button:hover{
+    background:linear-gradient(90deg,#1b4332,#40916c)!important;opacity:1!important;
+}
+</style><div class="wi-teaser-anchor"></div>""", unsafe_allow_html=True)
+                    if st.button("💡 Here's a Wild Idea — tap to reveal →",
+                                 use_container_width=True, key="wi_teaser_reveal"):
+                        st.session_state.wild_idea_expanded = True
+                        st.rerun()
+
+                else:
+                    # Expanded — resolve location, generate idea, show card
+                    _wi_lat, _wi_lng, _wi_loc = None, None, ""
+                    if st.session_state.mem_gps_active and st.session_state.mem_geo_data:
+                        _wi_lat = st.session_state.mem_geo_data['latitude']
+                        _wi_lng = st.session_state.mem_geo_data['longitude']
+                        _wi_loc = "your current location"
+                    elif st.session_state.mem_loc:
+                        _wi_lat, _wi_lng = get_coordinates(st.session_state.mem_loc)
+                        _wi_loc = st.session_state.mem_loc
+
+                    if _wi_lat:
+                        _prof_parts = []
+                        if user_profile:
+                            if user_profile.get('vibe_preference'): _prof_parts.append(user_profile['vibe_preference'])
+                            if user_profile.get('needs_nonalcoholic'): _prof_parts.append("non-alcoholic")
+                            if user_profile.get('dietary_restrictions'): _prof_parts.append(user_profile['dietary_restrictions'])
+                        _prof_summary = ", ".join(_prof_parts) if _prof_parts else "no specific preferences"
+
+                        if _should_generate_wild_idea(user_profile):
+                            _idea = get_wild_idea(
+                                str(st.session_state.user.id), _wi_lat, _wi_lng, _wi_loc, _prof_summary
+                            )
+                        else:
+                            # Cooldown active — still try cached version
+                            _idea = get_wild_idea(
+                                str(st.session_state.user.id), _wi_lat, _wi_lng, _wi_loc, _prof_summary
+                            )
+
+                        if _idea:
+                            st.markdown(f"""
 <div style="background:linear-gradient(135deg,#2d6a4f 0%,#52b788 100%);color:white;border-radius:12px;padding:16px 20px;margin-bottom:8px;">
   <div style="font-size:0.72rem;font-weight:700;letter-spacing:1.2px;opacity:0.85;margin-bottom:6px;">💡 HERE'S A WILD IDEA...</div>
   <div style="font-size:1.1rem;font-weight:700;margin-bottom:3px;">{_idea['emoji']} {_idea['name']}</div>
   <div style="font-size:0.88rem;opacity:0.92;">{_idea['why_now']}</div>
 </div>""", unsafe_allow_html=True)
-                        _wi_col1, _wi_col2, _wi_col3 = st.columns([2, 1, 3])
-                        with _wi_col1:
-                            if st.button("🎲 Let's Do It", key="wild_idea_go", type="primary", use_container_width=True):
-                                _dismiss_wild_idea(st.session_state.user.id)
-                                award_points(st.session_state.user.id, "wild_idea", 3, "Completed a Here's a Wild Idea")
-                                st.session_state.mem_spec  = _idea['name']
-                                st.session_state.current_mode = "get_wild"
-                                st.session_state.filters_dict = {
-                                    "group":    st.session_state.mem_group,
-                                    "time":     f"{st.session_state.mem_day} ({st.session_state.mem_time})",
-                                    "vibe":     st.session_state.mem_vibe,
-                                    "food":     st.session_state.mem_food,
-                                    "specific": _idea['name'],
-                                    "spend":    st.session_state.mem_spend,
-                                }
-                                st.session_state.search_active = True
-                                st.session_state.trigger_fetch = True
-                                st.session_state.session_seen_spots = []
-                                st.rerun()
-                        with _wi_col2:
-                            if st.button("✕ Dismiss", key="wild_idea_dismiss", use_container_width=True):
-                                _dismiss_wild_idea(st.session_state.user.id)
-                                st.rerun()
+                            _wi_col1, _wi_col2, _wi_col3 = st.columns([2, 1, 3])
+                            with _wi_col1:
+                                if st.button("🎲 Let's Do It", key="wild_idea_go", type="primary", use_container_width=True):
+                                    _dismiss_wild_idea(st.session_state.user.id)
+                                    award_points(st.session_state.user.id, "wild_idea", 3, "Completed a Here's a Wild Idea")
+                                    st.session_state.mem_spec  = _idea['name']
+                                    st.session_state.current_mode = "get_wild"
+                                    st.session_state.filters_dict = {
+                                        "group":    st.session_state.mem_group,
+                                        "time":     f"{st.session_state.mem_day} ({st.session_state.mem_time})",
+                                        "vibe":     st.session_state.mem_vibe,
+                                        "food":     st.session_state.mem_food,
+                                        "specific": _idea['name'],
+                                        "spend":    st.session_state.mem_spend,
+                                    }
+                                    st.session_state.search_active = True
+                                    st.session_state.trigger_fetch = True
+                                    st.session_state.session_seen_spots = []
+                                    st.rerun()
+                            with _wi_col2:
+                                if st.button("✕ Not Today", key="wild_idea_dismiss", use_container_width=True):
+                                    _dismiss_wild_idea(st.session_state.user.id)
+                                    st.rerun()
+                        else:
+                            # Idea generation failed — collapse back to teaser
+                            st.session_state.wild_idea_expanded = False
+                    else:
+                        # Location resolve failed — collapse
+                        st.session_state.wild_idea_expanded = False
             # ---- END WILD IDEA BANNER ----
 
             st.subheader("Where are we going?")
@@ -1864,6 +1925,9 @@ else:
                             status_loader.info("🗺️ Assembling your perfect itinerary...")
 
                         all_excluded = list(set((db_excluded or []) + st.session_state.session_seen_spots))
+                        # DEBUG — remove once shuffle is verified working
+                        _dbg_skip = st.session_state.get('skip_cache', False)
+                        st.write(f"DEBUG shuffle: skip_cache={_dbg_skip}, seen={len(st.session_state.session_seen_spots)} spots excluded: {st.session_state.session_seen_spots}")
                         user_favorites = user_favorites or []
 
                         cache_key = generate_cache_key(
