@@ -92,11 +92,14 @@ custom_css = """
     /* Card inner content */
     .wc-img-wrap { position: relative; width: 100%; height: 200px; overflow: hidden; }
     .wc-img { width: 100%; height: 100%; object-fit: cover; display: block; }
-    .wc-tier { position: absolute; bottom: 10px; left: 12px; background: rgba(0,0,0,0.62); color: #fff; font-size: 0.68rem; font-weight: 600; letter-spacing: 0.5px; padding: 4px 10px; border-radius: 20px; text-transform: uppercase; }
+    .wc-tier { position: absolute; bottom: 10px; left: 12px; background: rgba(0,0,0,0.75); color: #fff; font-size: 0.875rem; font-weight: 600; letter-spacing: 0.5px; padding: 5px 10px; border-radius: 20px; text-transform: uppercase; }
 
     .wc-body { padding: 16px; }
     .wc-name { font-size: 20px; font-weight: 700; color: #1a1a1a; margin: 0 0 5px 0; line-height: 1.3; }
-    .wc-meta { font-size: 0.78rem; color: #888; margin-bottom: 3px; font-weight: 500; }
+    .wc-meta { font-size: 0.78rem; color: #888; margin-bottom: 4px; font-weight: 500; }
+    .wc-vibe-row { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
+    .wc-vibe-pill { font-size: 12px; color: #444; background: #f0f0f0; border-radius: 12px; padding: 3px 10px; font-weight: 500; }
+    @media (prefers-color-scheme: dark) { .wc-vibe-pill { background: #2a2a2a; color: #ccc; } }
     .wc-address { font-size: 12px; color: #aaa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 12px; }
     .wc-hr { border: none; border-top: 1px solid #f0f0f0; margin: 12px 0; }
     .wc-pitch { font-size: 14px; line-height: 1.6; color: #444; margin: 0 0 8px 0; }
@@ -1670,15 +1673,26 @@ def render_spot_card(spot, location_input, user_id, index, mode):
     pitch      = spot.get('why_its_perfect', '')
     start_time = spot.get('start_time', '')
     venue_name = spot.get('venue_name', '')
-    _score = spot.get('spontaneity_score') or 0
-    try: _score = int(_score)
-    except: _score = 0
-    if _score >= 7:
-        spontaneity_badge = ' <span style="font-size:0.65rem;background:#e65100;color:#fff;padding:2px 7px;border-radius:10px;font-weight:700;vertical-align:middle;">🔥 Wild Choice</span>'
-    elif _score >= 4:
-        spontaneity_badge = ' <span style="font-size:0.65rem;background:#1565c0;color:#fff;padding:2px 7px;border-radius:10px;font-weight:700;vertical-align:middle;">⚡ Interesting Pick</span>'
+
+    # Tier badge left-border color by pool membership
+    _tn = tier_name.lower()
+    if _tn in {"the sure thing", "the crowd pleaser", "the local favorite", "the classic", "the reliable"}:
+        _tier_color = "#52b788"
+    elif _tn in {"the fresh take", "the curveball", "the surprise", "the interesting pick", "the plot twist"}:
+        _tier_color = "#f4a261"
+    elif _tn in {"the hidden gem", "the wild card", "the adventure", "the deep cut", "the discovery"}:
+        _tier_color = "#e76f51"
     else:
-        spontaneity_badge = ''
+        _tier_color = "#2d6a4f"  # get_wild / Spontaneous Adventure
+
+    # Vibe check pills
+    _vibe_words = [w.strip() for w in vibe.split(',') if w.strip()] if vibe else []
+    if _vibe_words:
+        _pills = [f'<span class="wc-vibe-pill">{"✨ " if i == 0 else ""}{w}</span>'
+                  for i, w in enumerate(_vibe_words)]
+        vibe_pills_html = '<div class="wc-vibe-row">' + ''.join(_pills) + '</div>'
+    else:
+        vibe_pills_html = ''
 
     # Event time line shown below venue name (Ticketmaster events only)
     _cat_lower = (category or '').lower()
@@ -1732,12 +1746,12 @@ def render_spot_card(spot, location_input, user_id, index, mode):
     html_card = f"""<div class="wc-shell">
   <div class="wc-img-wrap">
     <img src="{img_url}" class="wc-img" alt="">
-    <div class="wc-tier">✦ {tier_name}</div>
+    <div class="wc-tier" style="border-left: 3px solid {_tier_color};">✦ {tier_name}</div>
   </div>
   <div class="wc-body">
     <div class="wc-name">{title_prefix} {spot['name']}</div>
-    <div class="wc-meta">{category} • ✨ {vibe}{spontaneity_badge}</div>
-    {event_time_html}<div class="wc-address">📍 {address}</div>
+    <div class="wc-meta">{category}</div>
+    {vibe_pills_html}{event_time_html}<div class="wc-address">📍 {address}</div>
     {utility_html}
     <hr class="wc-hr">
     <p class="wc-pitch">{pitch}</p>
