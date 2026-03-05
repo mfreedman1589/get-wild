@@ -2027,9 +2027,6 @@ else:
                             status_loader.info("🗺️ Assembling your perfect itinerary...")
 
                         all_excluded = list(set((db_excluded or []) + st.session_state.session_seen_spots))
-                        # DEBUG — remove once shuffle is verified working
-                        _dbg_skip = st.session_state.get('skip_cache', False)
-                        st.write(f"DEBUG shuffle: skip_cache={_dbg_skip}, seen={len(st.session_state.session_seen_spots)} spots excluded: {st.session_state.session_seen_spots}")
                         user_favorites = user_favorites or []
 
                         cache_key = generate_cache_key(
