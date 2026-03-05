@@ -550,7 +550,7 @@ def _run_places_query(text_query, lat, lng, radius_miles, page_size=8):
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": GOOGLE_API_KEY,
-        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.websiteUri,places.photos,places.editorialSummary,places.location,places.userRatingCount"
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.priceLevel,places.currentOpeningHours,places.websiteUri,places.photos,places.editorialSummary,places.location"
     }
     radius_meters = int(radius_miles * 1609.34)
     try:
@@ -911,6 +911,22 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
     else:
         budget_rule = ""
 
+    price_rule = (
+        "PRICE MATCHING: Each venue in the Google Places data includes a priceLevel field. "
+        f"The user's spend filter is '{_spend}'. "
+        "Cross-reference priceLevel with the spend filter: "
+        "PRICE_LEVEL_FREE→🆓 Free, PRICE_LEVEL_INEXPENSIVE→$ Affordable, "
+        "PRICE_LEVEL_MODERATE→$ Moderate, PRICE_LEVEL_EXPENSIVE/VERY_EXPENSIVE→$$ Splurge. "
+        "Strongly prefer venues whose priceLevel matches. "
+        "NEVER recommend a PRICE_LEVEL_EXPENSIVE venue for a Free or Affordable search."
+    )
+
+    _intended_time = filters_dict.get('time', 'this evening')
+    hours_rule = (
+        f"HOURS RULE: If a venue's currentOpeningHours data shows it is CLOSED at the user's intended time ({_intended_time}), "
+        "do NOT recommend it. Only recommend venues that are open or have no hours data available."
+    )
+
     hidden_gem_mandate = (
         "HIDDEN GEM MANDATE: For the Hidden Gem tier specifically, actively prefer:\n"
         "- Venues with fewer than 100 Google reviews (newer = better)\n"
@@ -923,7 +939,7 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
     specific_rule = ""
     if filters_dict.get('specific'):
         _spec = filters_dict['specific']
-        specific_rule = f"""10. MANDATORY OVERRIDE — SPECIFIC REQUEST: '{_spec}'
+        specific_rule = f"""12. MANDATORY OVERRIDE — SPECIFIC REQUEST: '{_spec}'
     This is NON-NEGOTIABLE. ALL 3 recommendations MUST directly relate to '{_spec}'.
     If the Google Places data doesn't have enough relevant results, use the closest matches available
     and explain the connection in why_its_perfect.
@@ -983,7 +999,9 @@ RULES:
 6. VARIETY: Do not return 3 events, 3 of the same venue type, or 3 of the same category. Google Places results must provide the backbone of variety.
 {f"7. {group_rule}" if group_rule else ""}
 {f"8. {budget_rule}" if budget_rule else ""}
-9. {hidden_gem_mandate}
+9. {price_rule}
+10. {hours_rule}
+11. {hidden_gem_mandate}
 {specific_rule}
 
 {instruction}
@@ -1576,7 +1594,28 @@ else:
                             st.session_state.current_results = cached_result
                         else:
                             st.session_state.skip_cache = False
-                            selected_tiers = random.sample(TIER_PERSONALITIES, 3) if st.session_state.current_mode != "get_wild" else None
+                            if st.session_state.current_mode == "get_wild":
+                                selected_tiers = None
+                            else:
+                                _fd = st.session_state.filters_dict
+                                _pool = list(TIER_PERSONALITIES)
+                                _boosts = []
+                                _tier_by_name = {t['tier_name']: t for t in TIER_PERSONALITIES}
+                                def _boost(*names):
+                                    for n in names:
+                                        if n in _tier_by_name:
+                                            _boosts.extend([_tier_by_name[n]] * 2)
+                                if _fd.get('group') == 'Date':
+                                    _boost('The Date Night Pick', 'The Hidden Gem', 'The Comeback Kid')
+                                elif _fd.get('group') == 'Friends':
+                                    _boost('The Wild Card', 'The Local Favorite', 'The Adventure')
+                                elif _fd.get('group') == 'Family Outing':
+                                    _boost('The Crowd-Pleaser', 'The Local Favorite', 'The Underdog')
+                                if _fd.get('spend') == '$$ Splurge':
+                                    _boost('The Date Night Pick', 'The Comeback Kid')
+                                elif _fd.get('spend') == '🆓 Free':
+                                    _boost('The Hidden Gem', 'The Adventure', 'The Underdog')
+                                selected_tiers = random.sample(_pool + _boosts, 3)
                             ai_results = get_ai_recommendations(
                                 raw_places, live_events_data, weather_report,
                                 st.session_state.filters_dict, location_context,
