@@ -1177,7 +1177,7 @@ RULES:
 
 {instruction}
 
-Return JSON with a 'recommendations' array. Each item: name, tier_name, category, address (exact), why_its_perfect (2-3 sentences), vibe_check (3 words), matched_tags (2-3 strings; mandatory if specific given), website, lat, lng, spontaneity_score (integer 1-10: 1-3=safe/predictable, 4-6=interesting but accessible, 7-10=genuinely unexpected/adventurous)."""
+Return JSON with a 'recommendations' array. Each item: name, tier_name, category, address (exact), why_its_perfect (2-3 sentences), vibe_check (3 words), matched_tags (2-3 strings; mandatory if specific given), website, lat, lng, spontaneity_score (integer 1-10 using this strict rubric — DO NOT inflate scores: 1-2=mainstream chain or famous landmark everyone knows (Smithsonian, Cheesecake Factory, Central Park); 3-4=solid local spot most people have heard of or would immediately think to Google (neighborhood brewery, popular brunch spot, well-known hiking trail); 5-6=genuinely interesting find that most people wouldn't think of themselves but is easy to enjoy (rooftop bar with no reservations needed, lesser-known gallery, unique food hall); 7-8=surprisingly unconventional or hard-to-discover — requires insider knowledge or creative thinking (hidden speakeasy, axe throwing bar, ceramics class, underground supper club); 9-10=truly rare, unexpected, or brand-new — most locals haven't heard of it yet (pop-up experience, brand-new venue in soft opening, extremely niche activity). A small local museum scores 3-4. A neighborhood park scores 2-3. A bowling alley scores 5. Axe throwing scores 7. A brand-new pop-up art installation scores 9.)"""
 
     try:
         response = client.chat.completions.create(
@@ -1267,35 +1267,67 @@ def render_spot_card(spot, location_input, user_id, index, mode):
     encoded_address = urllib.parse.quote(spot['address'])
     uber_url = f"https://m.uber.com/ul/?action=setPickup&pickup=my_location&dropoff[formatted_address]={encoded_address}"
 
-    # Fallback image (priority: category → tier_name → why_its_perfect → name)
-    text_to_check = " ".join([
-        (spot.get('name', '') or ''),
-        (spot.get('category', '') or ''),
-        (spot.get('tier_name', '') or ''),
-        (spot.get('why_its_perfect', '') or ''),
-    ]).lower()
-    if any(k in text_to_check for k in ["wine", "winery", "vineyard", "sommelier"]):
-        fallback_url = "https://images.unsplash.com/photo-1510812431401-41d2bd2722f3?w=800&q=80"
-    elif any(k in text_to_check for k in ["brewery", "brewing", "brewpub", "craft beer", "taproom"]):
-        fallback_url = "https://images.unsplash.com/photo-1575367439058-6096bb9cf5e2?w=800&q=80"
-    elif any(k in text_to_check for k in ["cocktail", "speakeasy", "lounge", " bar", " pub"]):
-        fallback_url = "https://images.unsplash.com/photo-1575367439058-6096bb9cf5e2?w=800&q=80"
-    elif any(k in text_to_check for k in ["coffee", "cafe", "espresso", "tea"]):
-        fallback_url = "https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?w=800&q=80"
-    elif any(k in text_to_check for k in ["concert", "live music", "jazz", "band", "music venue", "performance"]):
-        fallback_url = "https://images.unsplash.com/photo-1540039155732-d68a96670afb?w=800&q=80"
-    elif any(k in text_to_check for k in ["theater", "comedy", "cinema", "show"]):
-        fallback_url = "https://images.unsplash.com/photo-1507676184212-d03ab07a01bf?w=800&q=80"
-    elif any(k in text_to_check for k in ["museum", "gallery", "art", "exhibit", "culture"]):
-        fallback_url = "https://images.unsplash.com/photo-1554907984-15263bfd63bd?w=800&q=80"
-    elif any(k in text_to_check for k in ["park", "garden", "outdoor", "nature", "trail", "hiking"]):
-        fallback_url = "https://images.unsplash.com/photo-1459749411175-04bf5292ceea?w=800&q=80"
-    elif any(k in text_to_check for k in ["restaurant", "dining", "food", "bistro", "kitchen", "eatery"]):
-        fallback_url = "https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=800&q=80"
-    elif any(k in text_to_check for k in ["bowling", "escape room", "arcade", "entertainment", "activity"]):
-        fallback_url = "https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=800&q=80"
-    else:
-        fallback_url = "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80"
+    # Fallback image — check category field first, then combined text
+    _UNSPLASH = {
+        "wine":        "https://images.unsplash.com/photo-1510812431401-41d2bd2722f3?w=800&q=80",
+        "brewery":     "https://images.unsplash.com/photo-1575367439058-6096bb9cf5e2?w=800&q=80",
+        "bar":         "https://images.unsplash.com/photo-1575367439058-6096bb9cf5e2?w=800&q=80",
+        "coffee":      "https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?w=800&q=80",
+        "music":       "https://images.unsplash.com/photo-1540039155732-d68a96670afb?w=800&q=80",
+        "theater":     "https://images.unsplash.com/photo-1507676184212-d03ab07a01bf?w=800&q=80",
+        "museum":      "https://images.unsplash.com/photo-1554907984-15263bfd63bd?w=800&q=80",
+        "gallery":     "https://images.unsplash.com/photo-1554907984-15263bfd63bd?w=800&q=80",
+        "park":        "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=800&q=80",
+        "trail":       "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=800&q=80",
+        "garden":      "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=800&q=80",
+        "restaurant":  "https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=800&q=80",
+        "entertainment": "https://images.unsplash.com/photo-1511882150382-421056c89033?w=800&q=80",
+    }
+    _CAT_RULES = [
+        (["winery", "wine bar", "vineyard"],                          "wine"),
+        (["brewery", "brewpub", "taproom", "craft beer"],             "brewery"),
+        (["cocktail bar", "speakeasy", "lounge", "bar", "pub"],       "bar"),
+        (["cafe", "coffee shop", "espresso", "tea house"],            "coffee"),
+        (["concert hall", "music venue", "jazz club", "live music"],  "music"),
+        (["theater", "comedy club", "cinema", "movie theater"],       "theater"),
+        (["museum", "history museum", "science museum"],              "museum"),
+        (["art gallery", "gallery"],                                   "gallery"),
+        (["national park", "state park", "park", "botanical garden",
+          "arboretum", "nature preserve", "hiking trail", "trail"],   "park"),
+        (["restaurant", "bistro", "eatery", "diner", "kitchen"],      "restaurant"),
+        (["escape room", "arcade", "bowling", "trampoline",
+          "axe throwing", "entertainment"],                            "entertainment"),
+    ]
+    _TEXT_RULES = [
+        (["wine", "winery", "vineyard", "sommelier"],                 "wine"),
+        (["brewery", "brewing", "brewpub", "craft beer", "taproom"],  "brewery"),
+        (["cocktail", "speakeasy", "lounge", " bar", " pub"],         "bar"),
+        (["coffee", "cafe", "espresso", "tea"],                       "coffee"),
+        (["concert", "live music", "jazz", "band", "music venue"],    "music"),
+        (["theater", "comedy", "cinema", "show"],                     "theater"),
+        (["museum", "exhibit", "exhibition"],                          "museum"),
+        (["art gallery", "gallery", "art space"],                     "gallery"),
+        (["park", "garden", "nature", "trail", "hiking", "outdoor"],  "park"),
+        (["restaurant", "dining", "food", "bistro", "kitchen"],       "restaurant"),
+        (["bowling", "escape room", "arcade", "entertainment", "activity"], "entertainment"),
+    ]
+    _bucket = None
+    _cat = (spot.get('category') or '').lower().strip()
+    for keywords, bucket in _CAT_RULES:
+        if any(k in _cat for k in keywords):
+            _bucket = bucket
+            break
+    if not _bucket:
+        _text = " ".join([
+            spot.get('name', '') or '',
+            spot.get('tier_name', '') or '',
+            spot.get('why_its_perfect', '') or '',
+        ]).lower()
+        for keywords, bucket in _TEXT_RULES:
+            if any(k in _text for k in keywords):
+                _bucket = bucket
+                break
+    fallback_url = _UNSPLASH.get(_bucket, "https://images.unsplash.com/photo-1514214246283-d427a95c5d2f?w=800&q=80")
 
     img_url = spot.get('photo_url') or fallback_url
 
