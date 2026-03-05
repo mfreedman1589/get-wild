@@ -32,6 +32,23 @@ TIER_PERSONALITIES = [
     {"tier_name": "The Adventure",      "description": "Gets you out of your comfort zone"},
 ]
 
+NON_TRADITIONAL_INDOOR = [
+    "escape room", "axe throwing", "pottery studio", "art class",
+    "cooking class", "improv comedy club", "karaoke bar",
+    "bowling alley", "arcade bar", "rage room", "paint and sip",
+    "maker space", "climbing gym", "trampoline park",
+    "virtual reality arcade", "board game cafe", "glass blowing studio",
+    "ceramics studio", "dance class", "murder mystery dinner",
+]
+
+NON_TRADITIONAL_OUTDOOR = [
+    "hiking trail", "bike trail", "kayak rental", "canoe rental",
+    "rock climbing", "disc golf", "botanical garden", "arboretum",
+    "scenic overlook", "waterfall", "swimming hole", "farm",
+    "vineyard tour", "orchard", "zip line", "paddleboard rental",
+    "outdoor climbing wall", "community garden", "nature preserve",
+]
+
 CACHE_VERSION = "v2"
 
 BADGE_DEFINITIONS = [
@@ -52,9 +69,13 @@ BADGE_DEFINITIONS = [
 GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 TICKETMASTER_API_KEY = st.secrets["TICKETMASTER_API_KEY"]
-OPENWEATHER_API_KEY = st.secrets["OPENWEATHER_API_KEY"] 
+OPENWEATHER_API_KEY = st.secrets["OPENWEATHER_API_KEY"]
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+try:
+    ALLTRAILS_API_KEY = st.secrets["ALLTRAILS_API_KEY"]
+except:
+    ALLTRAILS_API_KEY = None
 
 @st.cache_resource
 def init_supabase():
@@ -450,16 +471,25 @@ def get_live_weather(lat, lng):
     except: pass
     return "Weather data unavailable."
 
-def build_semantic_query(filters_dict, profile, preference_scores=None):
+def build_semantic_query(filters_dict, profile, preference_scores=None, mode=None):
     specific = (filters_dict.get('specific') or "").strip()
     vibe  = filters_dict.get('vibe', "Doesn't Matter")
     food  = filters_dict.get('food', 'Full Meal')
     group = filters_dict.get('group', '')
     spend = filters_dict.get('spend', '$ Moderate')
+    is_get_wild = (mode == "get_wild")
 
     # If specific keyword provided, it drives the query
     if specific:
         loc_hint = {"Date": "intimate", "Family Outing": "family-friendly", "Friends": "lively"}.get(group, "")
+        # Check if specific matches a known non-traditional type and boost it
+        _spec_lower = specific.lower()
+        _nt_match = next(
+            (t for t in NON_TRADITIONAL_INDOOR + NON_TRADITIONAL_OUTDOOR if t in _spec_lower or _spec_lower in t),
+            None
+        )
+        if _nt_match:
+            return f"{_nt_match} {specific} near me {loc_hint}".strip()
         parts = [f"{specific} venues", f"{specific} bars" if "bar" not in specific.lower() else "", loc_hint]
         return " ".join(p for p in parts if p).strip()
 
@@ -522,15 +552,24 @@ def build_semantic_query(filters_dict, profile, preference_scores=None):
         else:
             modifiers.append("upscale fine dining luxury high-end rooftop")
 
-    # Non-traditional venue extras for No Food / activity searches
-    if no_food:
+    # Non-traditional venue injection
+    if is_get_wild:
+        # Maximum spontaneity — sample from both lists
+        modifiers.append(" ".join(random.sample(NON_TRADITIONAL_INDOOR, 2)))
+        modifiers.append(" ".join(random.sample(NON_TRADITIONAL_OUTDOOR, 2)))
+    elif no_food:
         if vibe == "Inside":
-            modifiers.append("escape room pottery studio art class maker space community workshop")
+            modifiers.append(" ".join(random.sample(NON_TRADITIONAL_INDOOR, 3)))
         elif vibe == "Outside":
-            modifiers.append("scenic viewpoint bike trail")
+            modifiers.append(" ".join(random.sample(NON_TRADITIONAL_OUTDOOR, 3)))
+        else:
+            modifiers.append(" ".join(random.sample(NON_TRADITIONAL_INDOOR, 2)))
+            modifiers.append(" ".join(random.sample(NON_TRADITIONAL_OUTDOOR, 1)))
         modifiers.append("pop-up temporary installation")
+    elif food == "Just Drinks/Coffee" and group in ("Friends", "Date"):
+        modifiers.append("axe throwing bowling karaoke arcade bar")
     elif food != "Full Meal" and group in ("Date", "Friends"):
-        modifiers.append("pottery studio art class cooking class")
+        modifiers.append(" ".join(random.sample(NON_TRADITIONAL_INDOOR, 2)))
 
     exclusion = " NOT bar NOT brewery NOT restaurant NOT cafe" if no_food else ""
     modifier_str = " ".join(modifiers)
@@ -949,7 +988,7 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
     specific_rule = ""
     if filters_dict.get('specific'):
         _spec = filters_dict['specific']
-        specific_rule = f"""13. MANDATORY OVERRIDE — SPECIFIC REQUEST: '{_spec}'
+        specific_rule = f"""14. MANDATORY OVERRIDE — SPECIFIC REQUEST: '{_spec}'
     This is NON-NEGOTIABLE. ALL 3 recommendations MUST directly relate to '{_spec}'.
     If the Google Places data doesn't have enough relevant results, use the closest matches available
     and explain the connection in why_its_perfect.
@@ -1017,6 +1056,7 @@ RULES:
 10. {hours_rule}
 11. {hidden_gem_mandate}
 12. FRESHNESS BONUS: Any venue tagged just_opened=True in the input data is a priority pick for the Hidden Gem or Fresh Take tier — these are rare finds. Always include one if available.
+13. TRAIL DATA: Some results may be tagged source=alltrails. These are real verified trails with difficulty ratings and length. For outdoor/active searches, strongly consider including one trail as the Adventure or Hidden Gem tier pick.
 {specific_rule}
 
 {instruction}
@@ -1247,10 +1287,56 @@ def render_spot_card(spot, location_input, user_id, index, mode):
             if st.button("👎 Not for me", key=f"nope_{index}_{spot['name']}", use_container_width=True, help="Never suggest this again"):
                 save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'), rating=1, notes="Blacklisted via quick-button.")
 
+def fetch_alltrails_trails(lat, lng, radius_miles, difficulty=None):
+    """Fetch trails from AllTrails API. Returns [] if key not configured."""
+    if not ALLTRAILS_API_KEY:
+        return []
+    try:
+        params = {
+            "key": ALLTRAILS_API_KEY,
+            "lat": lat,
+            "lon": lng,
+            "radius": radius_miles,
+            "limit": 5,
+            "units": "i",  # imperial (miles)
+        }
+        if difficulty:
+            params["difficulty"] = difficulty
+        response = requests.get(
+            "https://api.alltrails.com/api/v2/trails",
+            params=params,
+            timeout=8,
+        )
+        if response.status_code != 200:
+            return []
+        trails_raw = response.json().get("trails", response.json().get("data", []))
+        results = []
+        for t in trails_raw:
+            results.append({
+                "title":          t.get("name", ""),
+                "name":           t.get("name", ""),
+                "description":    t.get("description", ""),
+                "difficulty":     t.get("difficulty", ""),
+                "length_miles":   t.get("length") or t.get("length_miles"),
+                "elevation_gain": t.get("elevation_gain"),
+                "rating":         t.get("avg_rating") or t.get("rating"),
+                "photo_url":      (t.get("profile_photo_data") or {}).get("medium_url") or t.get("photo_url"),
+                "url":            t.get("url", ""),
+                "lat":            t.get("lat") or t.get("latitude"),
+                "lng":            t.get("lng") or t.get("longitude"),
+                "source":         "alltrails",
+                "category":       "Trail",
+            })
+        return results
+    except:
+        return []
+
 # ==========================================
 # 5. ASYNC DATA GATHERER
 # ==========================================
-async def gather_all_data(lat, lng, semantic_query, distance, target_date_str, user_id, specific_keyword=""):
+_TRAIL_KEYWORDS = {"hike", "trail", "bike", "nature", "outdoor", "walk"}
+
+async def gather_all_data(lat, lng, semantic_query, distance, target_date_str, user_id, specific_keyword="", vibe="", food="", mode=""):
     async def _events_with_timeout():
         try:
             return await asyncio.wait_for(
@@ -1260,12 +1346,22 @@ async def gather_all_data(lat, lng, semantic_query, distance, target_date_str, u
         except (asyncio.TimeoutError, Exception):
             return []
 
+    _want_trails = (
+        (vibe == "Outside" and food == "No Food Needed") or
+        any(kw in (specific_keyword or "").lower() for kw in _TRAIL_KEYWORDS)
+    )
+
+    async def _trails_task():
+        if _want_trails:
+            return await asyncio.to_thread(fetch_alltrails_trails, lat, lng, distance)
+        return []
+
     weather_task   = asyncio.to_thread(get_live_weather, lat, lng)
     places_task    = asyncio.to_thread(fetch_places_semantic, semantic_query, lat, lng, distance)
     excluded_task  = asyncio.to_thread(get_excluded_spots, user_id)
     favorites_task = asyncio.to_thread(get_favorite_spots, user_id)
     prefs_task     = asyncio.to_thread(get_user_preference_scores, user_id)
-    return await asyncio.gather(weather_task, places_task, _events_with_timeout(), excluded_task, favorites_task, prefs_task)
+    return await asyncio.gather(weather_task, places_task, _events_with_timeout(), excluded_task, favorites_task, prefs_task, _trails_task())
 
 # ==========================================
 # 6. UI ROUTING
@@ -1577,21 +1673,26 @@ else:
                     else:
                         target_date_str, relative_day = get_local_target_date(lat, lng, st.session_state.mem_day)
                         pref_scores_pre = get_user_preference_scores(st.session_state.user.id)
-                        semantic_query = build_semantic_query(st.session_state.filters_dict, user_profile, pref_scores_pre)
+                        semantic_query = build_semantic_query(st.session_state.filters_dict, user_profile, pref_scores_pre, mode=st.session_state.current_mode)
 
                         status_loader.info("☁️ Curating local weather, places, and events...")
                         def _run_gather():
                             return gather_all_data(
                                 lat, lng, semantic_query, st.session_state.mem_dist,
                                 target_date_str, st.session_state.user.id,
-                                specific_keyword=st.session_state.filters_dict.get('specific', '')
+                                specific_keyword=st.session_state.filters_dict.get('specific', ''),
+                                vibe=st.session_state.filters_dict.get('vibe', ''),
+                                food=st.session_state.filters_dict.get('food', ''),
+                                mode=st.session_state.current_mode,
                             )
                         try:
-                            weather_report, raw_places, live_events_data, db_excluded, user_favorites, pref_scores = asyncio.run(_run_gather())
+                            weather_report, raw_places, live_events_data, db_excluded, user_favorites, pref_scores, trail_results = asyncio.run(_run_gather())
                         except RuntimeError:
                             import nest_asyncio
                             nest_asyncio.apply()
-                            weather_report, raw_places, live_events_data, db_excluded, user_favorites, pref_scores = asyncio.run(_run_gather())
+                            weather_report, raw_places, live_events_data, db_excluded, user_favorites, pref_scores, trail_results = asyncio.run(_run_gather())
+                        if trail_results:
+                            raw_places = (raw_places or []) + trail_results
 
                         if st.session_state.current_mode == "get_wild":
                             status_loader.info("🎲 Loading up your adventure and revealing the spontaneity...")
