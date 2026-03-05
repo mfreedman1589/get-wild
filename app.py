@@ -177,7 +177,11 @@ if 'mem_group' not in st.session_state: st.session_state.mem_group = "Date"
 if 'mem_vibe' not in st.session_state: st.session_state.mem_vibe = "Doesn't Matter"
 if 'mem_food' not in st.session_state: st.session_state.mem_food = "Full Meal"
 if 'mem_dist' not in st.session_state: st.session_state.mem_dist = 5
-if 'mem_spend' not in st.session_state: st.session_state.mem_spend = "$ Moderate"
+if 'mem_spend' not in st.session_state: st.session_state.mem_spend = "💰 Moderate"
+# Migrate old 4-option spend values to new 3-option format
+_spend_migrate = {"$ Affordable": "💰 Moderate", "$ Moderate": "💰 Moderate", "$$ Splurge": "✨ Splurge"}
+if st.session_state.mem_spend in _spend_migrate:
+    st.session_state.mem_spend = _spend_migrate[st.session_state.mem_spend]
 if 'mem_spec' not in st.session_state: st.session_state.mem_spec = ""
 if 'mem_gps_active' not in st.session_state: st.session_state.mem_gps_active = False
 if 'mem_geo_data' not in st.session_state: st.session_state.mem_geo_data = None
@@ -476,7 +480,7 @@ def build_semantic_query(filters_dict, profile, preference_scores=None, mode=Non
     vibe  = filters_dict.get('vibe', "Doesn't Matter")
     food  = filters_dict.get('food', 'Full Meal')
     group = filters_dict.get('group', '')
-    spend = filters_dict.get('spend', '$ Moderate')
+    spend = filters_dict.get('spend', '💰 Moderate')
     is_get_wild = (mode == "get_wild")
 
     # Activity keyword triggers — override base query entirely
@@ -608,9 +612,7 @@ def build_semantic_query(filters_dict, profile, preference_scores=None, mode=Non
     # Spend-level suffix modifiers
     if is_free:
         modifiers.append("free admission no cover charge")
-    elif spend == "$ Affordable":
-        modifiers.append("affordable casual budget-friendly")
-    elif spend == "$$ Splurge":
+    elif spend == "✨ Splurge":
         if group == "Date":
             base = "michelin star fine dining tasting menu upscale cocktail lounge"
         else:
@@ -1033,13 +1035,13 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
     else:
         group_rule = ""
 
-    _spend = filters_dict.get('spend', '$ Moderate')
+    _spend = filters_dict.get('spend', '💰 Moderate')
     if _spend == "🆓 Free":
         budget_rule = (
             "BUDGET RULE: User wants FREE options only. Every recommendation must be free or have no cover charge. "
             "No paid admission venues, no expensive restaurants."
         )
-    elif _spend == "$$ Splurge":
+    elif _spend == "✨ Splurge":
         budget_rule = (
             "BUDGET RULE: User is splurging. Prioritize upscale, impressive, high-end experiences. "
             "Avoid casual or budget spots."
@@ -1051,8 +1053,8 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
         "PRICE MATCHING: Each venue in the Google Places data includes a priceLevel field. "
         f"The user's spend filter is '{_spend}'. "
         "Cross-reference priceLevel with the spend filter: "
-        "PRICE_LEVEL_FREE→🆓 Free, PRICE_LEVEL_INEXPENSIVE→$ Affordable, "
-        "PRICE_LEVEL_MODERATE→$ Moderate, PRICE_LEVEL_EXPENSIVE/VERY_EXPENSIVE→$$ Splurge. "
+        "PRICE_LEVEL_FREE→🆓 Free, PRICE_LEVEL_INEXPENSIVE/MODERATE→💰 Moderate, "
+        "PRICE_LEVEL_EXPENSIVE/VERY_EXPENSIVE→✨ Splurge. "
         "Strongly prefer venues whose priceLevel matches. "
         "NEVER recommend a PRICE_LEVEL_EXPENSIVE venue for a Free or Affordable search."
     )
@@ -1654,42 +1656,58 @@ else:
             st.write("---")
             st.subheader("What's the plan?")
 
-            col_day, col_time = st.columns(2)
-            day_index = 0 if st.session_state.mem_day == "☀️ Today" else 1
-            time_index = 0 if st.session_state.mem_time == "☀️ Daytime" else 1
-            
-            with col_day: 
-                ui_day = st.radio("Day", ["☀️ Today", "📅 Tomorrow"], index=day_index, horizontal=True, label_visibility="collapsed")
-            with col_time: 
-                ui_time = st.radio("Time", ["☀️ Daytime", "🌙 Night"], index=time_index, horizontal=True, label_visibility="collapsed")
-            
+            # Option mappings: display ↔ internal value
+            _GROUP_OPTS  = ["💑 Date", "👨‍👩‍👧 Family", "👯 Friends", "🙋 Solo"]
+            _GROUP_TO_INT = {"💑 Date": "Date", "👨‍👩‍👧 Family": "Family Outing", "👯 Friends": "Friends", "🙋 Solo": "Solo"}
+            _INT_TO_GROUP = {v: k for k, v in _GROUP_TO_INT.items()}
+            _VIBE_OPTS   = ["✨ Anywhere", "🌿 Outside", "🏠 Inside"]
+            _VIBE_TO_INT  = {"✨ Anywhere": "Doesn't Matter", "🌿 Outside": "Outside", "🏠 Inside": "Inside"}
+            _INT_TO_VIBE  = {v: k for k, v in _VIBE_TO_INT.items()}
+            _FOOD_OPTS   = ["🍽️ Full Meal", "🍷 Drinks", "🎯 No Food"]
+            _FOOD_TO_INT  = {"🍽️ Full Meal": "Full Meal", "🍷 Drinks": "Just Drinks/Coffee", "🎯 No Food": "No Food Needed"}
+            _INT_TO_FOOD  = {v: k for k, v in _FOOD_TO_INT.items()}
+            _SPEND_OPTS  = ["🆓 Free", "💰 Moderate", "✨ Splurge"]
+
+            def _seg(label, options, default, sc_key):
+                """Segmented control with radio fallback; syncs default on first render."""
+                if sc_key not in st.session_state or st.session_state[sc_key] not in options:
+                    st.session_state[sc_key] = default if default in options else options[0]
+                try:
+                    val = st.segmented_control(label, options, key=sc_key)
+                    return val if val is not None else st.session_state[sc_key]
+                except AttributeError:
+                    idx = options.index(st.session_state[sc_key])
+                    return st.radio(label, options, index=idx, horizontal=True, key=sc_key + "_r")
+
+            # Row 1: Day + Time side by side
+            _c1, _c2 = st.columns(2)
+            with _c1:
+                ui_day = _seg("📅 When?", ["☀️ Today", "📅 Tomorrow"], st.session_state.mem_day, "seg_day")
+            with _c2:
+                ui_time = _seg("🕐 Time?", ["☀️ Daytime", "🌙 Night"], st.session_state.mem_time, "seg_time")
             intended_time = f"{ui_day} ({ui_time})"
 
-            st.write("") 
-            col_group, col_vibe = st.columns(2)
-            
-            group_options = ["Date", "Family Outing", "Friends", "Solo"]
-            with col_group: 
-                ui_group = st.selectbox("Who is going?", group_options, index=group_options.index(st.session_state.mem_group))
-            
-            vibe_options = ["Doesn't Matter", "Outside", "Inside"]
-            with col_vibe: 
-                ui_vibe = st.radio("Setting?", vibe_options, index=vibe_options.index(st.session_state.mem_vibe), horizontal=True)
-            
-            st.write("")
-            col_food, col_dist = st.columns(2)
+            # Row 2: Who
+            ui_group_d = _seg("👥 Who?", _GROUP_OPTS, _INT_TO_GROUP.get(st.session_state.mem_group, "💑 Date"), "seg_group")
+            ui_group   = _GROUP_TO_INT.get(ui_group_d, "Date")
 
-            food_options = ["Full Meal", "Just Drinks/Coffee", "No Food Needed"]
-            with col_food:
-                ui_food = st.selectbox("Sustenance?", food_options, index=food_options.index(st.session_state.mem_food))
-            with col_dist:
-                ui_dist = st.slider("Max Distance (Miles)", 1, 20, st.session_state.mem_dist)
+            # Row 3: Setting
+            ui_vibe_d = _seg("🌍 Setting?", _VIBE_OPTS, _INT_TO_VIBE.get(st.session_state.mem_vibe, "✨ Anywhere"), "seg_vibe")
+            ui_vibe   = _VIBE_TO_INT.get(ui_vibe_d, "Doesn't Matter")
 
-            spend_options = ["🆓 Free", "$ Affordable", "$ Moderate", "$$ Splurge"]
-            ui_spend = st.radio("Budget?", spend_options, index=spend_options.index(st.session_state.mem_spend), horizontal=True)
+            # Row 4: Food
+            ui_food_d = _seg("🍽️ Food?", _FOOD_OPTS, _INT_TO_FOOD.get(st.session_state.mem_food, "🍽️ Full Meal"), "seg_food")
+            ui_food   = _FOOD_TO_INT.get(ui_food_d, "Full Meal")
 
-            with st.expander("Need something specific? (Optional)", expanded=False):
-                ui_spec = st.text_input("Keyword", value=st.session_state.mem_spec, placeholder="e.g., 'romantic', 'live jazz', 'large group'", label_visibility="collapsed")
+            # Row 5: Budget
+            ui_spend = _seg("💸 Budget?", _SPEND_OPTS, st.session_state.mem_spend, "seg_spend")
+
+            # Row 6: Distance
+            ui_dist = st.slider("📍 Max Distance (Miles)", 1, 20, st.session_state.mem_dist)
+
+            # Row 7: Specific keyword (optional)
+            with st.expander("🔍 Specific keyword? (Optional)", expanded=False):
+                ui_spec = st.text_input("Keyword", value=st.session_state.mem_spec, placeholder="e.g., 'romantic', 'live jazz', 'axe throwing'", label_visibility="collapsed")
 
             st.write("---")
             
@@ -1823,7 +1841,7 @@ else:
                                     _boost('The Wild Card', 'The Local Favorite', 'The Adventure')
                                 elif _fd.get('group') == 'Family Outing':
                                     _boost('The Crowd-Pleaser', 'The Local Favorite', 'The Underdog')
-                                if _fd.get('spend') == '$$ Splurge':
+                                if _fd.get('spend') == '✨ Splurge':
                                     _boost('The Date Night Pick', 'The Comeback Kid')
                                 elif _fd.get('spend') == '🆓 Free':
                                     _boost('The Hidden Gem', 'The Adventure', 'The Underdog')
