@@ -156,6 +156,7 @@ if 'mem_group' not in st.session_state: st.session_state.mem_group = "Date"
 if 'mem_vibe' not in st.session_state: st.session_state.mem_vibe = "Doesn't Matter"
 if 'mem_food' not in st.session_state: st.session_state.mem_food = "Full Meal"
 if 'mem_dist' not in st.session_state: st.session_state.mem_dist = 5
+if 'mem_spend' not in st.session_state: st.session_state.mem_spend = "$ Moderate"
 if 'mem_spec' not in st.session_state: st.session_state.mem_spec = ""
 if 'mem_gps_active' not in st.session_state: st.session_state.mem_gps_active = False
 if 'mem_geo_data' not in st.session_state: st.session_state.mem_geo_data = None
@@ -451,19 +452,19 @@ def get_live_weather(lat, lng):
 
 def build_semantic_query(filters_dict, profile, preference_scores=None):
     specific = (filters_dict.get('specific') or "").strip()
+    vibe  = filters_dict.get('vibe', "Doesn't Matter")
+    food  = filters_dict.get('food', 'Full Meal')
+    group = filters_dict.get('group', '')
+    spend = filters_dict.get('spend', '$ Moderate')
 
-    # If specific keyword provided, it drives the query — base vibe/food is a secondary context hint
+    # If specific keyword provided, it drives the query
     if specific:
-        group = filters_dict.get('group', '')
-        loc_hint = ""
-        if group == "Date": loc_hint = "intimate"
-        elif group == "Family Outing": loc_hint = "family-friendly"
-        elif group == "Friends": loc_hint = "lively"
+        loc_hint = {"Date": "intimate", "Family Outing": "family-friendly", "Friends": "lively"}.get(group, "")
         parts = [f"{specific} venues", f"{specific} bars" if "bar" not in specific.lower() else "", loc_hint]
         return " ".join(p for p in parts if p).strip()
 
     modifiers = []
-    # Boost top 2 learned taste keywords (skip any in avoid list)
+    # Boost top 2 learned taste keywords (skip avoid list)
     if preference_scores:
         avoid = set(preference_scores.get('avoid_keywords') or [])
         for kw in (preference_scores.get('top_keywords') or [])[:2]:
@@ -471,31 +472,68 @@ def build_semantic_query(filters_dict, profile, preference_scores=None):
                 modifiers.append(kw)
 
     if profile:
-        if profile.get('needs_dog_friendly') and filters_dict['vibe'] == "Outside": modifiers.append("dog-friendly")
+        if profile.get('needs_dog_friendly') and vibe == "Outside": modifiers.append("dog-friendly")
         if profile.get('vibe_preference'): modifiers.append(profile.get('vibe_preference'))
 
-    if filters_dict['group'] == "Date": modifiers.append("intimate")
-    elif filters_dict['group'] == "Family Outing": modifiers.append("kid-friendly")
-    elif filters_dict['group'] == "Friends": modifiers.append("lively")
+    if group == "Date": modifiers.append("intimate")
+    elif group == "Family Outing": modifiers.append("kid-friendly")
+    elif group == "Friends": modifiers.append("lively")
 
-    modifier_str = " ".join(modifiers)
+    no_food = food == "No Food Needed"
+    is_free = spend == "🆓 Free"
 
-    # Always keep a strong base category so Google doesn't return random offices/services
-    no_food = filters_dict['food'] == "No Food Needed"
-    if filters_dict['vibe'] == "Outside":
-        if filters_dict['food'] == "Full Meal": base = "restaurants with nice patios"
-        elif filters_dict['food'] == "Just Drinks/Coffee": base = "wineries, cocktail bars with patios, or upscale breweries"
-        else: base = "parks, botanical gardens, hiking trails, scenic outdoor activities, nature reserves"
-    elif filters_dict['vibe'] == "Inside":
-        if filters_dict['food'] == "Full Meal": base = "highly rated restaurants"
-        elif filters_dict['food'] == "Just Drinks/Coffee": base = "wine bars, speakeasies, or lounges"
-        else: base = "museums, art galleries, science centers, escape rooms, bowling alleys, entertainment venues, unique attractions"
-    else:
-        if filters_dict['food'] == "Full Meal": base = "highly rated restaurants"
-        elif filters_dict['food'] == "Just Drinks/Coffee": base = "wine bars, speakeasies, or lounges"
-        else: base = "museums, parks, entertainment venues, unique attractions, or outdoor experiences"
+    # Base query by vibe + food + spend
+    if vibe == "Outside":
+        if is_free:
+            base = "free parks hiking trails nature reserves free outdoor spaces scenic viewpoints"
+        elif food == "Full Meal":
+            base = "restaurants with nice patios"
+        elif food == "Just Drinks/Coffee":
+            base = "wineries, cocktail bars with patios, or upscale breweries"
+        else:
+            base = "parks, botanical gardens, hiking trails, scenic outdoor activities, nature reserves"
+    elif vibe == "Inside":
+        if is_free:
+            base = "free museums free art galleries free community spaces free attractions"
+        elif food == "Full Meal":
+            base = "highly rated restaurants"
+        elif food == "Just Drinks/Coffee":
+            base = "wine bars, speakeasies, or lounges"
+        else:
+            base = "museums, art galleries, science centers, escape rooms, bowling alleys, entertainment venues, unique attractions"
+    else:  # Doesn't Matter
+        if is_free:
+            base = "free activities free entertainment free museums free parks"
+        elif food == "Full Meal":
+            base = "highly rated restaurants"
+        elif food == "Just Drinks/Coffee":
+            base = "wine bars, speakeasies, or lounges"
+        else:
+            base = "museums, parks, entertainment venues, unique attractions, or outdoor experiences"
+
+    # Spend-level suffix modifiers
+    if is_free:
+        modifiers.append("free admission no cover charge")
+    elif spend == "$ Affordable":
+        modifiers.append("affordable casual budget-friendly")
+    elif spend == "$$ Splurge":
+        if group == "Date":
+            base = "michelin star fine dining tasting menu upscale cocktail lounge"
+        else:
+            modifiers.append("upscale fine dining luxury high-end rooftop")
+
+    # Non-traditional venue extras for No Food / activity searches
+    if no_food:
+        if vibe == "Inside":
+            modifiers.append("escape room pottery studio art class maker space community workshop")
+        elif vibe == "Outside":
+            modifiers.append("scenic viewpoint bike trail")
+        modifiers.append("pop-up temporary installation")
+    elif food != "Full Meal" and group in ("Date", "Friends"):
+        modifiers.append("pottery studio art class cooking class")
 
     exclusion = " NOT bar NOT brewery NOT restaurant NOT cafe" if no_food else ""
+    modifier_str = " ".join(modifiers)
     return f"{modifier_str} {base}{exclusion}".strip()
 
 def haversine_miles(lat1, lon1, lat2, lon2):
@@ -506,48 +544,68 @@ def haversine_miles(lat1, lon1, lat2, lon2):
     a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
     return 2 * R * math.asin(math.sqrt(a))
 
-def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
+def _run_places_query(text_query, lat, lng, radius_miles, page_size=8):
+    """Single Google Places text search call. Returns raw place dicts."""
     url = "https://places.googleapis.com/v1/places:searchText"
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": GOOGLE_API_KEY,
-        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.websiteUri,places.photos,places.editorialSummary,places.location"
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.websiteUri,places.photos,places.editorialSummary,places.location,places.userRatingCount"
     }
     radius_meters = int(radius_miles * 1609.34)
-    data = {
-        "textQuery": semantic_query,
-        "pageSize": 8,
-        "locationBias": {"circle": {"center": {"latitude": lat, "longitude": lng}, "radius": radius_meters}}
-    }
     try:
-        response = requests.post(url, headers=headers, json=data, timeout=15)
+        response = requests.post(url, headers=headers, json={
+            "textQuery": text_query,
+            "pageSize": page_size,
+            "locationBias": {"circle": {"center": {"latitude": lat, "longitude": lng}, "radius": radius_meters}}
+        }, timeout=15)
         if response.status_code == 200:
-            places = response.json().get('places', [])
-            for place in places:
-                photos = place.get('photos', [])
-                if photos:
-                    photo_name = photos[0].get('name', '')
-                    place['photo_ref'] = photo_name
-                    place['photo_url'] = f"https://places.googleapis.com/v1/{photo_name}/media?key={GOOGLE_API_KEY}&maxHeightPx=400&maxWidthPx=800"
-                else:
-                    place['photo_ref'] = None
-                    place['photo_url'] = None
-            # Python-side distance filter (Google Places API ignores radius for text search)
-            threshold = radius_miles * 1.5
-            filtered = []
-            for place in places:
-                loc = place.get('location', {})
-                plat, plng = loc.get('latitude'), loc.get('longitude')
-                if plat and plng:
-                    dist = haversine_miles(lat, lng, plat, plng)
-                    place['distance_miles'] = round(dist, 1)
-                    if dist <= threshold:
-                        filtered.append(place)
-                else:
-                    filtered.append(place)
-            return filtered
-    except: pass
+            return response.json().get('places', [])
+    except:
+        pass
     return []
+
+def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
+    threshold = radius_miles * 1.5
+
+    def _process(places, freshness_boost=False):
+        out = []
+        for place in places:
+            photos = place.get('photos', [])
+            if photos:
+                photo_name = photos[0].get('name', '')
+                place['photo_ref'] = photo_name
+                place['photo_url'] = f"https://places.googleapis.com/v1/{photo_name}/media?key={GOOGLE_API_KEY}&maxHeightPx=400&maxWidthPx=800"
+            else:
+                place['photo_ref'] = None
+                place['photo_url'] = None
+            loc = place.get('location', {})
+            plat, plng = loc.get('latitude'), loc.get('longitude')
+            if plat and plng:
+                dist = haversine_miles(lat, lng, plat, plng)
+                place['distance_miles'] = round(dist, 1)
+                if dist > threshold:
+                    continue
+            if freshness_boost:
+                place['freshness_boost'] = True
+            out.append(place)
+        return out
+
+    main_places   = _run_places_query(semantic_query, lat, lng, radius_miles, page_size=8)
+    fresh_places  = _run_places_query(f"new opening pop-up unique hidden", lat, lng, radius_miles, page_size=3)
+
+    seen_names = set()
+    result = []
+    for p in _process(main_places, freshness_boost=False):
+        name = (p.get('displayName', {}).get('text') or '').lower()
+        seen_names.add(name)
+        result.append(p)
+    for p in _process(fresh_places, freshness_boost=True):
+        name = (p.get('displayName', {}).get('text') or '').lower()
+        if name and name not in seen_names:
+            seen_names.add(name)
+            result.append(p)
+    return result
 
 _TM_CLASSIFICATION_MAP = {
     "music":           ("music",        None),
@@ -839,10 +897,33 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
     else:
         group_rule = ""
 
+    _spend = filters_dict.get('spend', '$ Moderate')
+    if _spend == "🆓 Free":
+        budget_rule = (
+            "BUDGET RULE: User wants FREE options only. Every recommendation must be free or have no cover charge. "
+            "No paid admission venues, no expensive restaurants."
+        )
+    elif _spend == "$$ Splurge":
+        budget_rule = (
+            "BUDGET RULE: User is splurging. Prioritize upscale, impressive, high-end experiences. "
+            "Avoid casual or budget spots."
+        )
+    else:
+        budget_rule = ""
+
+    hidden_gem_mandate = (
+        "HIDDEN GEM MANDATE: For the Hidden Gem tier specifically, actively prefer:\n"
+        "- Venues with fewer than 100 Google reviews (newer = better)\n"
+        "- Venues whose name or description contains: pop-up, grand opening, soft launch, new, just opened, hidden, speakeasy, secret, limited time\n"
+        "- Non-traditional experiences: escape rooms, art studios, pottery, maker spaces, hiking trails, scenic viewpoints, community galleries\n"
+        "- Results tagged freshness_boost=True in the input data are newly discovered — strongly prefer these for this tier\n"
+        "- Avoid recommending well-known chains or tourist spots for this tier — if it has 500+ reviews it is NOT a hidden gem"
+    )
+
     specific_rule = ""
     if filters_dict.get('specific'):
         _spec = filters_dict['specific']
-        specific_rule = f"""8. MANDATORY OVERRIDE — SPECIFIC REQUEST: '{_spec}'
+        specific_rule = f"""10. MANDATORY OVERRIDE — SPECIFIC REQUEST: '{_spec}'
     This is NON-NEGOTIABLE. ALL 3 recommendations MUST directly relate to '{_spec}'.
     If the Google Places data doesn't have enough relevant results, use the closest matches available
     and explain the connection in why_its_perfect.
@@ -901,6 +982,8 @@ RULES:
 5. NO HALLUCINATION: Use exact addresses and URLs from input data. Never invent.
 6. VARIETY: Do not return 3 events, 3 of the same venue type, or 3 of the same category. Google Places results must provide the backbone of variety.
 {f"7. {group_rule}" if group_rule else ""}
+{f"8. {budget_rule}" if budget_rule else ""}
+9. {hidden_gem_mandate}
 {specific_rule}
 
 {instruction}
@@ -1315,6 +1398,7 @@ else:
                                     "vibe":     st.session_state.mem_vibe,
                                     "food":     st.session_state.mem_food,
                                     "specific": _idea['name'],
+                                    "spend":    st.session_state.mem_spend,
                                 }
                                 st.session_state.search_active = True
                                 st.session_state.trigger_fetch = True
@@ -1367,14 +1451,17 @@ else:
             with col_vibe: 
                 ui_vibe = st.radio("Setting?", vibe_options, index=vibe_options.index(st.session_state.mem_vibe), horizontal=True)
             
-            st.write("") 
+            st.write("")
             col_food, col_dist = st.columns(2)
-            
+
             food_options = ["Full Meal", "Just Drinks/Coffee", "No Food Needed"]
-            with col_food: 
+            with col_food:
                 ui_food = st.selectbox("Sustenance?", food_options, index=food_options.index(st.session_state.mem_food))
-            with col_dist: 
+            with col_dist:
                 ui_dist = st.slider("Max Distance (Miles)", 1, 20, st.session_state.mem_dist)
+
+            spend_options = ["🆓 Free", "$ Affordable", "$ Moderate", "$$ Splurge"]
+            ui_spend = st.radio("Budget?", spend_options, index=spend_options.index(st.session_state.mem_spend), horizontal=True)
 
             with st.expander("Need something specific? (Optional)", expanded=False):
                 ui_spec = st.text_input("Keyword", value=st.session_state.mem_spec, placeholder="e.g., 'romantic', 'live jazz', 'large group'", label_visibility="collapsed")
@@ -1401,12 +1488,13 @@ else:
                     st.session_state.mem_food = ui_food
                     st.session_state.mem_dist = ui_dist
                     st.session_state.mem_spec = ui_spec
-                    
+                    st.session_state.mem_spend = ui_spend
+
                     st.session_state.current_mode = "get_wild" if get_wild_clicked else "top_3"
                     st.session_state.filters_dict = {
-                        "group": ui_group, "time": intended_time, 
-                        "vibe": ui_vibe, "food": ui_food, 
-                        "specific": ui_spec
+                        "group": ui_group, "time": intended_time,
+                        "vibe": ui_vibe, "food": ui_food,
+                        "specific": ui_spec, "spend": ui_spend
                     }
                     st.session_state.search_active = True
                     st.session_state.trigger_fetch = True
