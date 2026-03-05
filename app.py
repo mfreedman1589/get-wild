@@ -900,42 +900,173 @@ def _dismiss_wild_idea(user_id):
 
 @st.cache_data(ttl=14400)
 def get_wild_idea(user_id_str, lat, lng, location_name, profile_summary):
-    """Returns a dict {name, category, why_now, emoji} or None. Cached 4 h."""
+    """Returns a full card-ready dict or None. Cached 4 h."""
     try:
-        # Use UTC hour as a reasonable time-of-day approximation
         h = datetime.utcnow().hour
-        if 6 <= h < 12:
-            time_context = "morning"
-        elif 12 <= h < 17:
-            time_context = "afternoon"
-        elif 17 <= h < 21:
-            time_context = "evening"
-        else:
-            time_context = "late night"
+        if 6 <= h < 12:       time_context = "morning"
+        elif 12 <= h < 17:    time_context = "afternoon"
+        elif 17 <= h < 21:    time_context = "evening"
+        else:                 time_context = "late night"
 
         client = OpenAI(api_key=OPENAI_API_KEY)
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             response_format={"type": "json_object"},
             messages=[{"role": "user", "content": (
-                f"You are a spontaneous local guide. Based on the time of day "
-                f"({time_context}) and this user's preferences ({profile_summary}), "
-                f"suggest ONE specific, surprising local activity or venue near "
-                f"{location_name} (lat={lat:.3f}, lng={lng:.3f}). "
+                f"You are a spontaneous local guide. Based on the time of day ({time_context}) "
+                f"and this user's preferences ({profile_summary}), suggest ONE specific, "
+                f"surprising local activity or venue near {location_name} (lat={lat:.3f}, lng={lng:.3f}). "
                 "Be specific and exciting. "
-                "Return JSON with exactly these keys: name, category, why_now "
-                "(one punchy sentence, max 12 words), emoji."
+                "Return JSON with exactly these keys: "
+                "name (specific venue name), "
+                "category (venue type, e.g. 'Escape Room', 'Jazz Club', 'Craft Brewery'), "
+                "why_now (one punchy 'why this, why tonight' sentence, max 15 words), "
+                "emoji (single emoji representing the vibe), "
+                "address (best known street address, or empty string if unknown), "
+                "spontaneity_score (integer 1-10: 1-2=famous landmark everyone knows, "
+                "3-4=popular local spot, 5-6=interesting find most wouldn't think of, "
+                "7-8=unconventional insider knowledge, 9-10=truly rare or brand new), "
+                "matched_tags (JSON array of 2-3 short descriptor strings, "
+                "e.g. [\"Unique Experience\", \"No Reservation\", \"Date Night\"])."
             )}],
-            max_tokens=120,
+            max_tokens=220,
             timeout=10,
         )
         data = json.loads(response.choices[0].message.content.strip())
-        # Validate required keys present
-        if all(k in data for k in ("name", "category", "why_now", "emoji")):
-            return data
+        if not all(k in data for k in ("name", "category", "why_now", "emoji")):
+            return None
+
+        # Normalize optional fields
+        if not isinstance(data.get('matched_tags'), list):
+            data['matched_tags'] = []
+        try:
+            data['spontaneity_score'] = int(data.get('spontaneity_score', 5))
+        except:
+            data['spontaneity_score'] = 5
+        if not isinstance(data.get('address'), str):
+            data['address'] = ''
+
+        # Fetch a Google Places photo for the venue
+        data['photo_url'] = None
+        try:
+            places_url = "https://places.googleapis.com/v1/places:searchText"
+            payload = {"textQuery": f"{data['name']} {location_name}", "maxResultCount": 1}
+            headers = {
+                "Content-Type": "application/json",
+                "X-Goog-Api-Key": GOOGLE_API_KEY,
+                "X-Goog-FieldMask": "places.photos,places.formattedAddress",
+            }
+            r = requests.post(places_url, json=payload, headers=headers, timeout=5)
+            if r.status_code == 200:
+                places = r.json().get('places', [])
+                if places:
+                    photos = places[0].get('photos', [])
+                    if photos:
+                        photo_name = photos[0].get('name', '')
+                        if photo_name:
+                            photo_url = (
+                                f"https://places.googleapis.com/v1/{photo_name}/media"
+                                f"?key={GOOGLE_API_KEY}&maxHeightPx=400&maxWidthPx=800"
+                            )
+                            try:
+                                head_r = requests.head(photo_url, timeout=3)
+                                if head_r.status_code == 200:
+                                    data['photo_url'] = photo_url
+                            except:
+                                pass
+                    # Grab address if GPT didn't provide one
+                    if not data['address']:
+                        data['address'] = places[0].get('formattedAddress', '')
+        except:
+            pass
+
+        return data
     except:
         pass
     return None
+
+def render_wild_idea_card(idea, location_input, user_id):
+    """Renders the wild idea as a full result card with three action buttons."""
+    name     = idea.get('name', 'Wild Idea')
+    category = idea.get('category', '')
+    why_now  = idea.get('why_now', '')
+    emoji    = idea.get('emoji', '🎲')
+    address  = idea.get('address', '')
+    score    = idea.get('spontaneity_score', 5)
+    tags     = idea.get('matched_tags', [])
+
+    img_url = idea.get('photo_url') or get_fallback_image(category, why_now)
+
+    try:    score = int(score)
+    except: score = 5
+    if score >= 7:
+        spont_badge = (' <span style="font-size:0.65rem;background:#e65100;color:#fff;'
+                       'padding:2px 7px;border-radius:10px;font-weight:700;vertical-align:middle;">'
+                       '🔥 Wild Choice</span>')
+    elif score >= 4:
+        spont_badge = (' <span style="font-size:0.65rem;background:#1565c0;color:#fff;'
+                       'padding:2px 7px;border-radius:10px;font-weight:700;vertical-align:middle;">'
+                       '⚡ Interesting Pick</span>')
+    else:
+        spont_badge = ''
+
+    tags_html = ''
+    if isinstance(tags, list):
+        for tag in tags[:3]:
+            tags_html += f'<span class="wc-tag">✓ {tag}</span>'
+
+    search_q = urllib.parse.quote(f"{name} {location_input}")
+    map_url  = f"https://www.google.com/maps/search/?api=1&query={search_q}"
+    addr_html    = f'<div class="wc-address">📍 {address}</div>' if address else ''
+    utility_html = (f'<div class="wc-utility">'
+                    f'<a href="{map_url}" target="_blank" class="wc-util-link">🗺️ Directions</a>'
+                    f'</div>')
+
+    html_card = f"""<div class="wc-shell">
+  <div class="wc-img-wrap">
+    <img src="{img_url}" class="wc-img" alt="">
+    <div class="wc-tier">✦ Wild Idea</div>
+  </div>
+  <div class="wc-body">
+    <div class="wc-name">{emoji} {name}</div>
+    <div class="wc-meta">{category}{spont_badge}</div>
+    {addr_html}
+    {utility_html}
+    <hr class="wc-hr">
+    <p class="wc-pitch">{why_now}</p>
+    <div class="wc-tags">{tags_html}</div>
+  </div>
+</div>"""
+
+    with st.container(border=True):
+        st.markdown(html_card, unsafe_allow_html=True)
+        col1, col2, col3 = st.columns(3)
+        _key = name.replace(' ', '_')[:20]
+        with col1:
+            if st.button("⭐ Save for Later", key=f"wi_save_{_key}", use_container_width=True):
+                save_spot_to_db(user_id, name, address, category)
+                award_points(user_id, "save", 1, "Saved a Wild Idea spot")
+                st.session_state.wild_idea_expanded = False
+                st.rerun()
+        with col2:
+            if st.button("✅ I'm Going", key=f"wi_going_{_key}", use_container_width=True, type="primary"):
+                save_spot_to_db(user_id, name, address, category, notes="chosen")
+                award_points(user_id, "going", 3, "🎲 Wild Idea accepted! +3 points")
+                check_and_award_badges(user_id)
+                st.session_state.wild_idea_expanded = False
+                st.balloons()
+                st.rerun()
+        with col3:
+            if st.button("✕ Not for me", key=f"wi_nope_{_key}", use_container_width=True):
+                _dismiss_wild_idea(user_id)
+                st.rerun()
+
+    st.markdown(
+        '<p style="text-align:center;color:#9ca3af;font-size:0.78rem;margin-top:2px;">'
+        '✨ Check back — ideas get better as you get more wild</p>',
+        unsafe_allow_html=True,
+    )
+
 
 # NOTE: Eventbrite supplemental events source was evaluated and skipped.
 # Eventbrite's public event search API (GET /v3/events/search/ with lat/lng radius)
@@ -1275,6 +1406,64 @@ def match_photos_to_results(recommendations, raw_places, live_events=None):
 
     return recommendations
 
+_UNSPLASH_FALLBACKS = {
+    "wine":          "https://images.unsplash.com/photo-1510812431401-41d2bd2722f3?w=800&q=80",
+    "brewery":       "https://images.unsplash.com/photo-1575367439058-6096bb9cf5e2?w=800&q=80",
+    "bar":           "https://images.unsplash.com/photo-1575367439058-6096bb9cf5e2?w=800&q=80",
+    "coffee":        "https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?w=800&q=80",
+    "music":         "https://images.unsplash.com/photo-1540039155732-d68a96670afb?w=800&q=80",
+    "theater":       "https://images.unsplash.com/photo-1507676184212-d03ab07a01bf?w=800&q=80",
+    "museum":        "https://images.unsplash.com/photo-1554907984-15263bfd63bd?w=800&q=80",
+    "gallery":       "https://images.unsplash.com/photo-1554907984-15263bfd63bd?w=800&q=80",
+    "park":          "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=800&q=80",
+    "trail":         "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=800&q=80",
+    "garden":        "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=800&q=80",
+    "restaurant":    "https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=800&q=80",
+    "entertainment": "https://images.unsplash.com/photo-1511882150382-421056c89033?w=800&q=80",
+}
+_CAT_RULES_IMG = [
+    (["winery", "wine bar", "vineyard"],                          "wine"),
+    (["brewery", "brewpub", "taproom", "craft beer"],             "brewery"),
+    (["cocktail bar", "speakeasy", "lounge", "bar", "pub"],       "bar"),
+    (["cafe", "coffee shop", "espresso", "tea house"],            "coffee"),
+    (["concert hall", "music venue", "jazz club", "live music"],  "music"),
+    (["theater", "comedy club", "cinema", "movie theater"],       "theater"),
+    (["museum", "history museum", "science museum"],              "museum"),
+    (["art gallery", "gallery"],                                   "gallery"),
+    (["national park", "state park", "park", "botanical garden",
+      "arboretum", "nature preserve", "hiking trail", "trail"],   "park"),
+    (["restaurant", "bistro", "eatery", "diner", "kitchen"],      "restaurant"),
+    (["escape room", "arcade", "bowling", "trampoline",
+      "axe throwing", "entertainment"],                            "entertainment"),
+]
+_TEXT_RULES_IMG = [
+    (["wine", "winery", "vineyard", "sommelier"],                 "wine"),
+    (["brewery", "brewing", "brewpub", "craft beer", "taproom"],  "brewery"),
+    (["cocktail", "speakeasy", "lounge", " bar", " pub"],         "bar"),
+    (["coffee", "cafe", "espresso", "tea"],                       "coffee"),
+    (["concert", "live music", "jazz", "band", "music venue"],    "music"),
+    (["theater", "comedy", "cinema", "show"],                     "theater"),
+    (["museum", "exhibit", "exhibition"],                          "museum"),
+    (["art gallery", "gallery", "art space"],                     "gallery"),
+    (["park", "garden", "nature", "trail", "hiking", "outdoor"],  "park"),
+    (["restaurant", "dining", "food", "bistro", "kitchen"],       "restaurant"),
+    (["bowling", "escape room", "arcade", "entertainment", "activity"], "entertainment"),
+]
+
+def get_fallback_image(category, text=""):
+    """Return a category-appropriate Unsplash URL. Checks category string first, then text."""
+    cat = (category or '').lower().strip()
+    for keywords, bucket in _CAT_RULES_IMG:
+        if any(k in cat for k in keywords):
+            return _UNSPLASH_FALLBACKS[bucket]
+    if text:
+        t = text.lower()
+        for keywords, bucket in _TEXT_RULES_IMG:
+            if any(k in t for k in keywords):
+                return _UNSPLASH_FALLBACKS[bucket]
+    return "https://images.unsplash.com/photo-1514214246283-d427a95c5d2f?w=800&q=80"
+
+
 def render_spot_card(spot, location_input, user_id, index, mode):
     title_prefix = f"{index}." if mode == "top_3" else "🎲"
 
@@ -1283,68 +1472,11 @@ def render_spot_card(spot, location_input, user_id, index, mode):
     encoded_address = urllib.parse.quote(spot['address'])
     uber_url = f"https://m.uber.com/ul/?action=setPickup&pickup=my_location&dropoff[formatted_address]={encoded_address}"
 
-    # Fallback image — check category field first, then combined text
-    _UNSPLASH = {
-        "wine":        "https://images.unsplash.com/photo-1510812431401-41d2bd2722f3?w=800&q=80",
-        "brewery":     "https://images.unsplash.com/photo-1575367439058-6096bb9cf5e2?w=800&q=80",
-        "bar":         "https://images.unsplash.com/photo-1575367439058-6096bb9cf5e2?w=800&q=80",
-        "coffee":      "https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?w=800&q=80",
-        "music":       "https://images.unsplash.com/photo-1540039155732-d68a96670afb?w=800&q=80",
-        "theater":     "https://images.unsplash.com/photo-1507676184212-d03ab07a01bf?w=800&q=80",
-        "museum":      "https://images.unsplash.com/photo-1554907984-15263bfd63bd?w=800&q=80",
-        "gallery":     "https://images.unsplash.com/photo-1554907984-15263bfd63bd?w=800&q=80",
-        "park":        "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=800&q=80",
-        "trail":       "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=800&q=80",
-        "garden":      "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=800&q=80",
-        "restaurant":  "https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=800&q=80",
-        "entertainment": "https://images.unsplash.com/photo-1511882150382-421056c89033?w=800&q=80",
-    }
-    _CAT_RULES = [
-        (["winery", "wine bar", "vineyard"],                          "wine"),
-        (["brewery", "brewpub", "taproom", "craft beer"],             "brewery"),
-        (["cocktail bar", "speakeasy", "lounge", "bar", "pub"],       "bar"),
-        (["cafe", "coffee shop", "espresso", "tea house"],            "coffee"),
-        (["concert hall", "music venue", "jazz club", "live music"],  "music"),
-        (["theater", "comedy club", "cinema", "movie theater"],       "theater"),
-        (["museum", "history museum", "science museum"],              "museum"),
-        (["art gallery", "gallery"],                                   "gallery"),
-        (["national park", "state park", "park", "botanical garden",
-          "arboretum", "nature preserve", "hiking trail", "trail"],   "park"),
-        (["restaurant", "bistro", "eatery", "diner", "kitchen"],      "restaurant"),
-        (["escape room", "arcade", "bowling", "trampoline",
-          "axe throwing", "entertainment"],                            "entertainment"),
-    ]
-    _TEXT_RULES = [
-        (["wine", "winery", "vineyard", "sommelier"],                 "wine"),
-        (["brewery", "brewing", "brewpub", "craft beer", "taproom"],  "brewery"),
-        (["cocktail", "speakeasy", "lounge", " bar", " pub"],         "bar"),
-        (["coffee", "cafe", "espresso", "tea"],                       "coffee"),
-        (["concert", "live music", "jazz", "band", "music venue"],    "music"),
-        (["theater", "comedy", "cinema", "show"],                     "theater"),
-        (["museum", "exhibit", "exhibition"],                          "museum"),
-        (["art gallery", "gallery", "art space"],                     "gallery"),
-        (["park", "garden", "nature", "trail", "hiking", "outdoor"],  "park"),
-        (["restaurant", "dining", "food", "bistro", "kitchen"],       "restaurant"),
-        (["bowling", "escape room", "arcade", "entertainment", "activity"], "entertainment"),
-    ]
-    _bucket = None
-    _cat = (spot.get('category') or '').lower().strip()
-    for keywords, bucket in _CAT_RULES:
-        if any(k in _cat for k in keywords):
-            _bucket = bucket
-            break
-    if not _bucket:
-        _text = " ".join([
-            spot.get('name', '') or '',
-            spot.get('tier_name', '') or '',
-            spot.get('why_its_perfect', '') or '',
-        ]).lower()
-        for keywords, bucket in _TEXT_RULES:
-            if any(k in _text for k in keywords):
-                _bucket = bucket
-                break
-    fallback_url = _UNSPLASH.get(_bucket, "https://images.unsplash.com/photo-1514214246283-d427a95c5d2f?w=800&q=80")
-
+    extra_text = " ".join([
+        spot.get('tier_name', '') or '',
+        spot.get('why_its_perfect', '') or '',
+    ])
+    fallback_url = get_fallback_image(spot.get('category', ''), extra_text)
     img_url = spot.get('photo_url') or fallback_url
 
     # Tag pills
@@ -1691,7 +1823,7 @@ else:
                         st.rerun()
 
                 else:
-                    # Expanded — resolve location, generate idea, show card
+                    # Expanded — resolve location, generate idea, render full card
                     _wi_lat, _wi_lng, _wi_loc = None, None, ""
                     if st.session_state.mem_gps_active and st.session_state.mem_geo_data:
                         _wi_lat = st.session_state.mem_geo_data['latitude']
@@ -1709,48 +1841,18 @@ else:
                             if user_profile.get('dietary_restrictions'): _prof_parts.append(user_profile['dietary_restrictions'])
                         _prof_summary = ", ".join(_prof_parts) if _prof_parts else "no specific preferences"
 
-                        if _should_generate_wild_idea(user_profile):
-                            _idea = get_wild_idea(
-                                str(st.session_state.user.id), _wi_lat, _wi_lng, _wi_loc, _prof_summary
-                            )
-                        else:
-                            # Cooldown active — still try cached version
-                            _idea = get_wild_idea(
-                                str(st.session_state.user.id), _wi_lat, _wi_lng, _wi_loc, _prof_summary
-                            )
-
+                        _idea = get_wild_idea(
+                            str(st.session_state.user.id), _wi_lat, _wi_lng, _wi_loc, _prof_summary
+                        )
                         if _idea:
-                            st.markdown(f"""
-<div style="background:linear-gradient(135deg,#2d6a4f 0%,#52b788 100%);color:white;border-radius:12px;padding:16px 20px;margin-bottom:8px;">
-  <div style="font-size:0.72rem;font-weight:700;letter-spacing:1.2px;opacity:0.85;margin-bottom:6px;">💡 HERE'S A WILD IDEA...</div>
-  <div style="font-size:1.1rem;font-weight:700;margin-bottom:3px;">{_idea['emoji']} {_idea['name']}</div>
-  <div style="font-size:0.88rem;opacity:0.92;">{_idea['why_now']}</div>
-</div>""", unsafe_allow_html=True)
-                            _wi_col1, _wi_col2, _wi_col3 = st.columns([2, 1, 3])
-                            with _wi_col1:
-                                if st.button("🎲 Let's Do It", key="wild_idea_go", type="primary", use_container_width=True):
-                                    _dismiss_wild_idea(st.session_state.user.id)
-                                    award_points(st.session_state.user.id, "wild_idea", 3, "Completed a Here's a Wild Idea")
-                                    st.session_state.mem_spec  = _idea['name']
-                                    st.session_state.current_mode = "get_wild"
-                                    st.session_state.filters_dict = {
-                                        "group":    st.session_state.mem_group,
-                                        "time":     f"{st.session_state.mem_day} ({st.session_state.mem_time})",
-                                        "vibe":     st.session_state.mem_vibe,
-                                        "food":     st.session_state.mem_food,
-                                        "specific": _idea['name'],
-                                        "spend":    st.session_state.mem_spend,
-                                    }
-                                    st.session_state.search_active = True
-                                    st.session_state.trigger_fetch = True
-                                    st.session_state.session_seen_spots = []
-                                    st.rerun()
-                            with _wi_col2:
-                                if st.button("✕ Not Today", key="wild_idea_dismiss", use_container_width=True):
-                                    _dismiss_wild_idea(st.session_state.user.id)
-                                    st.rerun()
+                            st.markdown(
+                                '<div style="font-size:0.72rem;font-weight:700;letter-spacing:1.2px;'
+                                'color:#2d6a4f;margin-bottom:6px;">💡 HERE\'S A WILD IDEA...</div>',
+                                unsafe_allow_html=True,
+                            )
+                            render_wild_idea_card(_idea, _wi_loc, st.session_state.user.id)
                         else:
-                            # Idea generation failed — collapse back to teaser
+                            # Generation failed — collapse to teaser
                             st.session_state.wild_idea_expanded = False
                     else:
                         # Location resolve failed — collapse
