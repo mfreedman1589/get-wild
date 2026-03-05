@@ -568,6 +568,9 @@ def _run_places_query(text_query, lat, lng, radius_miles, page_size=8):
 def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
     threshold = radius_miles * 1.5
 
+    _JUST_OPENED_KWS = {"new", "just opened", "grand opening", "opening soon",
+                        "soft launch", "pop-up", "popup", "newly opened"}
+
     def _process(places, freshness_boost=False):
         out = []
         for place in places:
@@ -588,6 +591,13 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
                     continue
             if freshness_boost:
                 place['freshness_boost'] = True
+            # Detect newly opened venues from name + editorial summary text
+            _text = " ".join([
+                (place.get('displayName', {}).get('text') or '').lower(),
+                (place.get('editorialSummary', {}).get('text') or '').lower(),
+            ])
+            if any(kw in _text for kw in _JUST_OPENED_KWS):
+                place['just_opened'] = True
             out.append(place)
         return out
 
@@ -939,7 +949,7 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
     specific_rule = ""
     if filters_dict.get('specific'):
         _spec = filters_dict['specific']
-        specific_rule = f"""12. MANDATORY OVERRIDE — SPECIFIC REQUEST: '{_spec}'
+        specific_rule = f"""13. MANDATORY OVERRIDE — SPECIFIC REQUEST: '{_spec}'
     This is NON-NEGOTIABLE. ALL 3 recommendations MUST directly relate to '{_spec}'.
     If the Google Places data doesn't have enough relevant results, use the closest matches available
     and explain the connection in why_its_perfect.
@@ -996,17 +1006,22 @@ RULES:
 3. EVENTS DATE CHECK: Only events with date_verified=True on {relative_day} ({target_date_str}) are eligible. why_its_perfect must include venue name and address. Never fabricate event details.
 {weather_rule}
 5. NO HALLUCINATION: Use exact addresses and URLs from input data. Never invent.
-6. VARIETY: Do not return 3 events, 3 of the same venue type, or 3 of the same category. Google Places results must provide the backbone of variety.
+6. MANDATORY VARIETY RULE: The 3 recommendations MUST come from different venue categories. Specifically:
+   - No two results can share the same primary category (e.g. two bars, two breweries, two restaurants of the same cuisine type)
+   - At least one result should be non-food/drink focused if food filter is 'No Food Needed' or 'Just Drinks/Coffee'
+   - If the Places data only contains one venue type, acknowledge this in why_its_perfect rather than returning 3 of the same thing
+   - Never return 3 events; Google Places must provide the backbone of variety
 {f"7. {group_rule}" if group_rule else ""}
 {f"8. {budget_rule}" if budget_rule else ""}
 9. {price_rule}
 10. {hours_rule}
 11. {hidden_gem_mandate}
+12. FRESHNESS BONUS: Any venue tagged just_opened=True in the input data is a priority pick for the Hidden Gem or Fresh Take tier — these are rare finds. Always include one if available.
 {specific_rule}
 
 {instruction}
 
-Return JSON with a 'recommendations' array. Each item: name, tier_name, category, address (exact), why_its_perfect (2-3 sentences), vibe_check (3 words), matched_tags (2-3 strings; mandatory if specific given), website, lat, lng."""
+Return JSON with a 'recommendations' array. Each item: name, tier_name, category, address (exact), why_its_perfect (2-3 sentences), vibe_check (3 words), matched_tags (2-3 strings; mandatory if specific given), website, lat, lng, spontaneity_score (integer 1-10: 1-3=safe/predictable, 4-6=interesting but accessible, 7-10=genuinely unexpected/adventurous)."""
 
     try:
         response = client.chat.completions.create(
@@ -1144,6 +1159,15 @@ def render_spot_card(spot, location_input, user_id, index, mode):
     pitch      = spot.get('why_its_perfect', '')
     start_time = spot.get('start_time', '')
     venue_name = spot.get('venue_name', '')
+    _score = spot.get('spontaneity_score') or 0
+    try: _score = int(_score)
+    except: _score = 0
+    if _score >= 7:
+        spontaneity_badge = ' <span style="font-size:0.65rem;background:#e65100;color:#fff;padding:2px 7px;border-radius:10px;font-weight:700;vertical-align:middle;">🔥 Wild Choice</span>'
+    elif _score >= 4:
+        spontaneity_badge = ' <span style="font-size:0.65rem;background:#1565c0;color:#fff;padding:2px 7px;border-radius:10px;font-weight:700;vertical-align:middle;">⚡ Interesting Pick</span>'
+    else:
+        spontaneity_badge = ''
 
     # Event time line shown below venue name (Ticketmaster events only)
     is_event = bool(spot.get('image_url')) or any(k in (category or '') for k in ['Event', 'Music', 'Sports', 'Concert', 'Arts'])
@@ -1197,7 +1221,7 @@ def render_spot_card(spot, location_input, user_id, index, mode):
   </div>
   <div class="wc-body">
     <div class="wc-name">{title_prefix} {spot['name']}</div>
-    <div class="wc-meta">{category} • ✨ {vibe}</div>
+    <div class="wc-meta">{category} • ✨ {vibe}{spontaneity_badge}</div>
     {event_time_html}<div class="wc-address">📍 {address}</div>
     {utility_html}
     <hr class="wc-hr">
