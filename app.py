@@ -19,18 +19,9 @@ from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_not_e
 # ==========================================
 # 1. CONFIGURATION & SECRETS
 # ==========================================
-TIER_PERSONALITIES = [
-    {"tier_name": "The Crowd-Pleaser",  "description": "A highly rated safe bet everyone will enjoy"},
-    {"tier_name": "The Hidden Gem",     "description": "Quirky, unique, or off the beaten path"},
-    {"tier_name": "The Fresh Take",     "description": "New, trending, or a live event happening now"},
-    {"tier_name": "The Local Favorite", "description": "Where locals actually go, not tourists"},
-    {"tier_name": "The Wild Card",      "description": "Unexpected and spontaneous — trust the process"},
-    {"tier_name": "The Date Night Pick","description": "Intimate, romantic, and impressive"},
-    {"tier_name": "The Comeback Kid",   "description": "An old classic that's been reinvented or is having a moment"},
-    {"tier_name": "The Underdog",       "description": "Lesser known but punches above its weight"},
-    {"tier_name": "The Vibe Match",     "description": "Perfectly matches the specific mood requested"},
-    {"tier_name": "The Adventure",      "description": "Gets you out of your comfort zone"},
-]
+TIER_1_NAMES = ["The Sure Thing", "The Crowd Pleaser", "The Local Favorite", "The Classic", "The Reliable"]
+TIER_2_NAMES = ["The Fresh Take", "The Curveball", "The Surprise", "The Interesting Pick", "The Plot Twist"]
+TIER_3_NAMES = ["The Hidden Gem", "The Wild Card", "The Adventure", "The Deep Cut", "The Discovery"]
 
 NON_TRADITIONAL_INDOOR = [
     "escape room", "axe throwing", "pottery studio", "art class",
@@ -676,6 +667,39 @@ def haversine_miles(lat1, lon1, lat2, lon2):
     a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
     return 2 * R * math.asin(math.sqrt(a))
 
+_JUST_OPENED_KWS = {"new", "just opened", "grand opening", "opening soon",
+                    "soft launch", "pop-up", "popup", "newly opened"}
+
+def _process_places(places, lat, lng, threshold, freshness_boost=False):
+    """Process raw Places API results: add photo_url, distance_miles, just_opened flags."""
+    out = []
+    for place in places:
+        photos = place.get('photos', [])
+        if photos:
+            photo_name = photos[0].get('name', '')
+            place['photo_ref'] = photo_name
+            place['photo_url'] = f"https://places.googleapis.com/v1/{photo_name}/media?key={GOOGLE_API_KEY}&maxHeightPx=400&maxWidthPx=800"
+        else:
+            place['photo_ref'] = None
+            place['photo_url'] = None
+        loc = place.get('location', {})
+        plat, plng = loc.get('latitude'), loc.get('longitude')
+        if plat and plng:
+            dist = haversine_miles(lat, lng, plat, plng)
+            place['distance_miles'] = round(dist, 1)
+            if dist > threshold:
+                continue
+        if freshness_boost:
+            place['freshness_boost'] = True
+        _text = " ".join([
+            (place.get('displayName', {}).get('text') or '').lower(),
+            (place.get('editorialSummary', {}).get('text') or '').lower(),
+        ])
+        if any(kw in _text for kw in _JUST_OPENED_KWS):
+            place['just_opened'] = True
+        out.append(place)
+    return out
+
 def _run_places_query(text_query, lat, lng, radius_miles, page_size=8):
     """Single Google Places text search call. Returns raw place dicts."""
     url = "https://places.googleapis.com/v1/places:searchText"
@@ -711,39 +735,6 @@ _OUTDOOR_QUERY_POOL = [
 def fetch_places_semantic(semantic_query, lat, lng, radius_miles, vibe="", food=""):
     threshold = radius_miles * 1.5
 
-    _JUST_OPENED_KWS = {"new", "just opened", "grand opening", "opening soon",
-                        "soft launch", "pop-up", "popup", "newly opened"}
-
-    def _process(places, freshness_boost=False):
-        out = []
-        for place in places:
-            photos = place.get('photos', [])
-            if photos:
-                photo_name = photos[0].get('name', '')
-                place['photo_ref'] = photo_name
-                place['photo_url'] = f"https://places.googleapis.com/v1/{photo_name}/media?key={GOOGLE_API_KEY}&maxHeightPx=400&maxWidthPx=800"
-            else:
-                place['photo_ref'] = None
-                place['photo_url'] = None
-            loc = place.get('location', {})
-            plat, plng = loc.get('latitude'), loc.get('longitude')
-            if plat and plng:
-                dist = haversine_miles(lat, lng, plat, plng)
-                place['distance_miles'] = round(dist, 1)
-                if dist > threshold:
-                    continue
-            if freshness_boost:
-                place['freshness_boost'] = True
-            # Detect newly opened venues from name + editorial summary text
-            _text = " ".join([
-                (place.get('displayName', {}).get('text') or '').lower(),
-                (place.get('editorialSummary', {}).get('text') or '').lower(),
-            ])
-            if any(kw in _text for kw in _JUST_OPENED_KWS):
-                place['just_opened'] = True
-            out.append(place)
-        return out
-
     main_places  = _run_places_query(semantic_query, lat, lng, radius_miles, page_size=12)
     fresh_places = _run_places_query("new opening pop-up unique hidden", lat, lng, radius_miles, page_size=3)
 
@@ -755,22 +746,143 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles, vibe="", food=
 
     seen_names = set()
     result = []
-    for p in _process(main_places, freshness_boost=False):
+    for p in _process_places(main_places, lat, lng, threshold, freshness_boost=False):
         name = (p.get('displayName', {}).get('text') or '').lower()
         seen_names.add(name)
         result.append(p)
-    for p in _process(fresh_places, freshness_boost=True):
+    for p in _process_places(fresh_places, lat, lng, threshold, freshness_boost=True):
         name = (p.get('displayName', {}).get('text') or '').lower()
         if name and name not in seen_names:
             seen_names.add(name)
             result.append(p)
-    for p in _process(outdoor_extra, freshness_boost=False):
+    for p in _process_places(outdoor_extra, lat, lng, threshold, freshness_boost=False):
         name = (p.get('displayName', {}).get('text') or '').lower()
         if name and name not in seen_names:
             p['outdoor_boost'] = True
             seen_names.add(name)
             result.append(p)
     return result
+
+def build_tier_queries(filters_dict, profile=None, preference_scores=None):
+    """Build 3 tier-specific Place queries for parallel fetching.
+    Returns (t1_query, t2_query, t3_query):
+      - tier1: reliable, crowd-pleasing spots (highly-rated, established)
+      - tier2: fresh, interesting picks (new, trending, unique)
+      - tier3: hidden gems (unconventional, lesser-known, quirky)
+    """
+    vibe    = filters_dict.get('vibe', "Doesn't Matter")
+    food    = filters_dict.get('food', 'Full Meal')
+    group   = filters_dict.get('group', '')
+    spend   = filters_dict.get('spend', '💰 Moderate')
+    specific = (filters_dict.get('specific') or '').strip()
+    is_free  = (spend == "🆓 Free")
+
+    _gm = {"Date": "intimate romantic", "Family Outing": "family friendly kid-friendly",
+           "Friends": "lively group social", "Solo": "solo-friendly"}.get(group, "")
+
+    # Specific keyword: all 3 tiers target it, differentiated by quality signal
+    if specific:
+        return (
+            f"popular well-rated {specific} {_gm}".strip(),
+            f"new unique {specific} {_gm}".strip(),
+            f"hidden local {specific} {_gm}".strip(),
+        )
+
+    # Free budget: all tiers target free venues
+    if is_free:
+        if vibe == "Outside":
+            base = "free park trail nature area waterfront public plaza"
+        elif vibe == "Inside":
+            base = "free museum art gallery library community center"
+        else:
+            base = "free park museum trail public attraction community event"
+        return (
+            f"popular well-known {base}".strip(),
+            f"interesting unique {base}".strip(),
+            f"secret off the beaten path {base} local gem".strip(),
+        )
+
+    # Full Meal: all tiers target restaurants, differentiated by angle
+    if food == "Full Meal":
+        _fm_map = {
+            "Family Outing": "family restaurant kid friendly dining",
+            "Date":          "romantic restaurant fine dining intimate",
+            "Friends":       "lively restaurant group dining social",
+            "Solo":          "restaurant solo dining counter seating",
+        }
+        base_type = _fm_map.get(group, "restaurant dining local eats")
+        splurge = (spend == "✨ Splurge")
+        out_pfx = "outdoor dining patio " if vibe == "Outside" else ("cozy indoor " if vibe == "Inside" else "")
+        t1 = f"{'upscale michelin ' if splurge else 'popular highly rated '}{out_pfx}{base_type} {_gm}".strip()
+        t2 = f"new trending interesting cuisine {out_pfx}{base_type} chef driven {_gm}".strip()
+        t3 = f"hidden gem local secret hole-in-the-wall {out_pfx}{base_type} {_gm}".strip()
+        return (t1, t2, t3)
+
+    # Just Drinks/Coffee
+    if food == "Just Drinks/Coffee":
+        if vibe == "Outside":
+            return (
+                f"popular outdoor bar beer garden brewery patio {_gm}".strip(),
+                f"rooftop bar unique outdoor cocktails wine bar {_gm}".strip(),
+                f"hidden local craft cocktail speakeasy secret bar {_gm}".strip(),
+            )
+        elif vibe == "Inside":
+            return (
+                f"popular cocktail bar wine bar craft brewery {_gm}".strip(),
+                f"unique cocktail lounge wine tasting room interesting bar {_gm}".strip(),
+                f"hidden speakeasy secret bar local craft cocktail {_gm}".strip(),
+            )
+        else:
+            return (
+                f"popular bar cocktail lounge brewery wine bar {_gm}".strip(),
+                f"unique rooftop bar wine bar speakeasy interesting cocktails {_gm}".strip(),
+                f"hidden speakeasy secret bar local craft cocktail gem {_gm}".strip(),
+            )
+
+    # No Food Needed
+    if vibe == "Outside":
+        return (
+            f"popular park hiking trail nature preserve outdoor recreation {_gm}".strip(),
+            f"unique outdoor activity botanical garden scenic overlook kayaking {_gm}".strip(),
+            f"hidden nature trail waterfall swimming hole secret outdoor gem {_gm}".strip(),
+        )
+    elif vibe == "Inside":
+        return (
+            f"popular entertainment museum art gallery indoor attraction {_gm}".strip(),
+            f"escape room axe throwing pottery class unique entertainment {_gm}".strip(),
+            f"hidden local speakeasy underground niche experience secret venue {_gm}".strip(),
+        )
+    else:
+        return (
+            f"popular local attraction museum park entertainment venue {_gm}".strip(),
+            f"unique interesting escape room art gallery brewery activity {_gm}".strip(),
+            f"hidden gem off the beaten path local secret niche unusual activity {_gm}".strip(),
+        )
+
+def fetch_tier_places(t1_query, t2_query, t3_query, lat, lng, radius_miles):
+    """Fetch 3 tiers of Places results in parallel. Returns {'tier1': [...], 'tier2': [...], 'tier3': [...]}."""
+    from concurrent.futures import ThreadPoolExecutor
+    threshold = radius_miles * 1.5
+
+    def _fetch(query, page_size, freshness_boost):
+        raw = _run_places_query(query, lat, lng, radius_miles, page_size=page_size)
+        return _process_places(raw, lat, lng, threshold, freshness_boost=freshness_boost)
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        f1 = executor.submit(_fetch, t1_query, 10, False)
+        f2 = executor.submit(_fetch, t2_query, 8,  False)
+        f3 = executor.submit(_fetch, t3_query, 8,  True)   # freshness_boost flags tier 3 results
+        tier1 = f1.result()
+        tier2 = f2.result()
+        tier3 = f3.result()
+
+    # Deduplicate across tiers — tier1 has priority
+    seen = {(p.get('displayName', {}).get('text') or '').lower() for p in tier1}
+    tier2 = [p for p in tier2 if (p.get('displayName', {}).get('text') or '').lower() not in seen]
+    seen.update((p.get('displayName', {}).get('text') or '').lower() for p in tier2)
+    tier3 = [p for p in tier3 if (p.get('displayName', {}).get('text') or '').lower() not in seen]
+
+    return {'tier1': tier1, 'tier2': tier2, 'tier3': tier3}
 
 _TM_CLASSIFICATION_MAP = {
     "music":           ("music",        None),
@@ -1092,26 +1204,33 @@ def render_wild_idea_card(idea, location_input, user_id):
 # Eventbrite introduces a new discovery API.
 
 @retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3), retry=retry_if_not_exception_type(TimeoutError))
-def get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_name, target_date_str, relative_day, profile, excluded_spots, favorite_spots, mode="top_3", tier_personalities=None, lat=None, lng=None, radius_miles=20, preference_scores=None):
+def get_ai_recommendations(places_data, live_events_data, weather_report, filters_dict, location_name, target_date_str, relative_day, profile, excluded_spots, favorite_spots, mode="top_3", lat=None, lng=None, radius_miles=20, preference_scores=None):
     client = OpenAI(api_key=OPENAI_API_KEY)
-    
+
     _spend_filter = filters_dict.get('spend', '💰 Moderate')
     _PAID_LEVELS = {"PRICE_LEVEL_MODERATE", "PRICE_LEVEL_EXPENSIVE", "PRICE_LEVEL_VERY_EXPENSIVE"}
     _PREMIUM_LEVELS = {"PRICE_LEVEL_EXPENSIVE", "PRICE_LEVEL_VERY_EXPENSIVE"}
-    if isinstance(raw_places, list):
+    _excl_lower = {s.lower().strip() for s in (excluded_spots or [])}
+
+    def _filter_tier(places):
         if _spend_filter == "🆓 Free":
-            raw_places = [p for p in raw_places if p.get('priceLevel') not in _PAID_LEVELS]
+            places = [p for p in places if p.get('priceLevel') not in _PAID_LEVELS]
         elif _spend_filter == "✨ Splurge":
-            raw_places = sorted(raw_places, key=lambda p: 0 if p.get('priceLevel') in _PREMIUM_LEVELS else 1)
-    # Pre-filter: remove already-seen/excluded venues so AI never sees them in its pool
-    if excluded_spots and isinstance(raw_places, list):
-        _excl_lower = {s.lower().strip() for s in excluded_spots}
-        raw_places = [
-            p for p in raw_places
-            if not any(ex in (p.get('displayName', {}).get('text', '') or '').lower()
-                       for ex in _excl_lower)
-        ]
-    trimmed_places = raw_places[:8] if isinstance(raw_places, list) and len(raw_places) > 8 else raw_places
+            places = sorted(places, key=lambda p: 0 if p.get('priceLevel') in _PREMIUM_LEVELS else 1)
+        if _excl_lower:
+            places = [p for p in places if not any(
+                ex in (p.get('displayName', {}).get('text', '') or '').lower() for ex in _excl_lower
+            )]
+        return places
+
+    _is_tiered = isinstance(places_data, dict)
+    if _is_tiered:
+        trimmed_t1 = _filter_tier(places_data.get('tier1', []))[:5]
+        trimmed_t2 = _filter_tier(places_data.get('tier2', []))[:5]
+        trimmed_t3 = _filter_tier(places_data.get('tier3', []))[:5]
+        trimmed_places = None  # not used in tiered mode
+    else:
+        trimmed_places = _filter_tier(list(places_data) if places_data else [])[:8]
     # Python-level events gate — AI never sees events when food=Full Meal
     _food_filter = filters_dict.get('food', '')
     if _food_filter == 'Full Meal':
@@ -1158,13 +1277,22 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
     if mode == "get_wild":
         instruction = """Select EXACTLY ONE option from the data. Assign it the category: 'Spontaneous Adventure'."""
     else:
-        tiers = tier_personalities or TIER_PERSONALITIES[:3]
-        tier_lines = "\n".join(f"        {i+1}. '{t['tier_name']}': {t['description']}." for i, t in enumerate(tiers))
-        instruction = f"""
-        Return EXACTLY 3 options from the data, providing STRICT VARIETY (do not return 3 of the exact same type of venue).
-        Assign each to one of these directional 'tier_name' categories:
-{tier_lines}
-        """
+        _t1 = random.choice(TIER_1_NAMES)
+        _t2 = random.choice(TIER_2_NAMES)
+        _t3 = random.choice(TIER_3_NAMES)
+        if _is_tiered:
+            instruction = f"""
+        Return EXACTLY 3 recommendations, one from each TIER DATA section:
+        1. '{_t1}' — use a result from TIER 1 DATA (highly-rated, established, crowd-pleasing).
+        2. '{_t2}' — use a result from TIER 2 DATA (new, trending, interesting, or unique).
+        3. '{_t3}' — use a result from TIER 3 DATA (hidden, unconventional, lesser-known).
+        STRICT RULE: Each recommendation MUST come from its designated tier. If a tier's data is empty, use the best match from any tier.
+            """
+        else:
+            instruction = f"""
+        Return EXACTLY 3 options from the data, providing STRICT VARIETY.
+        Assign each to one of these tier_name labels: '{_t1}', '{_t2}', '{_t3}'.
+            """
 
     _vibe = filters_dict.get('vibe', '')
     _wr = (weather_report or "").lower()
@@ -1263,11 +1391,11 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
     )
 
     hidden_gem_mandate = (
-        "HIDDEN GEM MANDATE: For the Hidden Gem tier specifically, actively prefer:\n"
+        "HIDDEN GEM MANDATE: For the TIER 3 (Hidden Gem) recommendation specifically, actively prefer:\n"
         "- Venues with fewer than 100 Google reviews (newer = better)\n"
         "- Venues whose name or description contains: pop-up, grand opening, soft launch, new, just opened, hidden, speakeasy, secret, limited time\n"
         "- Non-traditional experiences: escape rooms, art studios, pottery, maker spaces, hiking trails, scenic viewpoints, community galleries\n"
-        "- Results tagged freshness_boost=True in the input data are newly discovered — strongly prefer these for this tier\n"
+        "- Results tagged freshness_boost=True in TIER 3 DATA are newly discovered — strongly prefer these\n"
         "- Avoid recommending well-known chains or tourist spots for this tier — if it has 500+ reviews it is NOT a hidden gem"
     )
 
@@ -1341,7 +1469,7 @@ RULES:
 9. {price_rule}
 10. {hours_rule}
 11. {hidden_gem_mandate}
-12. FRESHNESS BONUS: Any venue tagged just_opened=True in the input data is a priority pick for the Hidden Gem or Fresh Take tier — these are rare finds. Always include one if available.
+12. FRESHNESS BONUS: Any venue tagged just_opened=True in the input data is a priority pick for the TIER 3 (Hidden Gem) or TIER 2 (Fresh Take) recommendation — these are rare finds. Always include one if available.
 13. TRAIL DATA: Some results may be tagged source=alltrails. These are real verified trails with difficulty ratings and length. For outdoor/active searches, strongly consider including one trail as the Adventure or Hidden Gem tier pick.
 {specific_rule}
 
@@ -1358,8 +1486,15 @@ Return JSON with a 'recommendations' array. Each item: name, tier_name, category
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": (
-                    f"=== PRIMARY DATA (Google Places — use these first) ===\n{json.dumps(trimmed_places)}\n\n"
-                    f"=== SUPPLEMENTARY DATA (Live Events — max 1 slot, only if food filter allows) ===\n"
+                    (
+                        f"=== TIER 1 DATA (Crowd-Pleasing — highly rated, established) ===\n{json.dumps(trimmed_t1)}\n\n"
+                        f"=== TIER 2 DATA (Fresh Take — new, trending, interesting) ===\n{json.dumps(trimmed_t2)}\n\n"
+                        f"=== TIER 3 DATA (Hidden Gem — quirky, unconventional, lesser-known) ===\n{json.dumps(trimmed_t3)}\n\n"
+                    ) if _is_tiered else (
+                        f"=== PRIMARY DATA (Google Places) ===\n{json.dumps(trimmed_places)}\n\n"
+                    )
+                ) + (
+                    f"=== EVENTS DATA (max 1 slot, only if food filter allows) ===\n"
                     f"{json.dumps(safe_events_data) if isinstance(safe_events_data, list) else safe_events_data}"
                 )}
             ],
@@ -1676,7 +1811,8 @@ def fetch_alltrails_trails(lat, lng, radius_miles, difficulty=None):
 # ==========================================
 _TRAIL_KEYWORDS = {"hike", "trail", "bike", "nature", "outdoor", "walk"}
 
-async def gather_all_data(lat, lng, semantic_query, distance, target_date_str, user_id, specific_keyword="", vibe="", food="", mode=""):
+async def gather_all_data(lat, lng, places_input, distance, target_date_str, user_id, specific_keyword="", vibe="", food="", mode=""):
+    """places_input: tuple of (t1q, t2q, t3q) for tier-based fetching, or str for single semantic query."""
     async def _events_with_timeout():
         try:
             return await asyncio.wait_for(
@@ -1696,11 +1832,14 @@ async def gather_all_data(lat, lng, semantic_query, distance, target_date_str, u
             return await asyncio.to_thread(fetch_alltrails_trails, lat, lng, distance)
         return []
 
-    weather_task   = asyncio.to_thread(get_live_weather, lat, lng)
-    places_task    = asyncio.to_thread(fetch_places_semantic, semantic_query, lat, lng, distance, vibe, food)
-    excluded_task  = asyncio.to_thread(get_excluded_spots, user_id)
+    weather_task  = asyncio.to_thread(get_live_weather, lat, lng)
+    excluded_task = asyncio.to_thread(get_excluded_spots, user_id)
     favorites_task = asyncio.to_thread(get_favorite_spots, user_id)
-    prefs_task     = asyncio.to_thread(get_user_preference_scores, user_id)
+    prefs_task    = asyncio.to_thread(get_user_preference_scores, user_id)
+    if isinstance(places_input, tuple):
+        places_task = asyncio.to_thread(fetch_tier_places, *places_input, lat, lng, distance)
+    else:
+        places_task = asyncio.to_thread(fetch_places_semantic, places_input, lat, lng, distance, vibe, food)
     return await asyncio.gather(weather_task, places_task, _events_with_timeout(), excluded_task, favorites_task, prefs_task, _trails_task())
 
 # ==========================================
@@ -2044,12 +2183,17 @@ else:
                     else:
                         target_date_str, relative_day = get_local_target_date(lat, lng, st.session_state.mem_day)
                         pref_scores_pre = get_user_preference_scores(st.session_state.user.id)
-                        semantic_query = build_semantic_query(st.session_state.filters_dict, user_profile, pref_scores_pre, mode=st.session_state.current_mode)
+                        # get_wild uses a single semantic query; top_3 uses 3 parallel tier queries
+                        _is_get_wild = (st.session_state.current_mode == "get_wild")
+                        if _is_get_wild or st.session_state.filters_dict.get('specific', '').strip():
+                            places_input = build_semantic_query(st.session_state.filters_dict, user_profile, pref_scores_pre, mode=st.session_state.current_mode)
+                        else:
+                            places_input = build_tier_queries(st.session_state.filters_dict, user_profile, pref_scores_pre)
 
                         status_loader.info("☁️ Curating local weather, places, and events...")
                         def _run_gather():
                             return gather_all_data(
-                                lat, lng, semantic_query, st.session_state.mem_dist,
+                                lat, lng, places_input, st.session_state.mem_dist,
                                 target_date_str, st.session_state.user.id,
                                 specific_keyword=st.session_state.filters_dict.get('specific', ''),
                                 vibe=st.session_state.filters_dict.get('vibe', ''),
@@ -2062,8 +2206,12 @@ else:
                             import nest_asyncio
                             nest_asyncio.apply()
                             weather_report, raw_places, live_events_data, db_excluded, user_favorites, pref_scores, trail_results = asyncio.run(_run_gather())
+                        # Merge trail results — add to tier1 if tiered, else append to flat list
                         if trail_results:
-                            raw_places = (raw_places or []) + trail_results
+                            if isinstance(raw_places, dict):
+                                raw_places['tier1'] = (raw_places.get('tier1') or []) + trail_results
+                            else:
+                                raw_places = (raw_places or []) + trail_results
 
                         if st.session_state.current_mode == "get_wild":
                             status_loader.info("🎲 Loading up your adventure and revealing the spontaneity...")
@@ -2090,43 +2238,27 @@ else:
                             st.session_state.current_results = cached_result
                         else:
                             st.session_state.skip_cache = False
-                            if st.session_state.current_mode == "get_wild":
-                                selected_tiers = None
-                            else:
-                                _fd = st.session_state.filters_dict
-                                _pool = list(TIER_PERSONALITIES)
-                                _boosts = []
-                                _tier_by_name = {t['tier_name']: t for t in TIER_PERSONALITIES}
-                                def _boost(*names):
-                                    for n in names:
-                                        if n in _tier_by_name:
-                                            _boosts.extend([_tier_by_name[n]] * 2)
-                                if _fd.get('group') == 'Date':
-                                    _boost('The Date Night Pick', 'The Hidden Gem', 'The Comeback Kid')
-                                elif _fd.get('group') == 'Friends':
-                                    _boost('The Wild Card', 'The Local Favorite', 'The Adventure')
-                                elif _fd.get('group') == 'Family Outing':
-                                    _boost('The Crowd-Pleaser', 'The Local Favorite', 'The Underdog')
-                                if _fd.get('spend') == '✨ Splurge':
-                                    _boost('The Date Night Pick', 'The Comeback Kid')
-                                elif _fd.get('spend') == '🆓 Free':
-                                    _boost('The Hidden Gem', 'The Adventure', 'The Underdog')
-                                selected_tiers = random.sample(_pool + _boosts, 3)
                             ai_results = get_ai_recommendations(
                                 raw_places, live_events_data, weather_report,
                                 st.session_state.filters_dict, location_context,
                                 target_date_str, relative_day, user_profile, all_excluded,
                                 user_favorites, mode=st.session_state.current_mode,
-                                tier_personalities=selected_tiers,
                                 lat=lat, lng=lng, radius_miles=st.session_state.mem_dist,
                                 preference_scores=pref_scores
                             )
+                            # Build combined photo map from all tiers (or flat list for get_wild)
+                            _all_places = []
+                            if isinstance(raw_places, dict):
+                                for _tier_list in raw_places.values():
+                                    _all_places.extend(_tier_list)
+                            else:
+                                _all_places = raw_places or []
                             _places_photo_map = {
                                 place.get('displayName', {}).get('text', '').lower().strip(): place.get('photo_url')
-                                for place in (raw_places or [])
+                                for place in _all_places
                                 if place.get('photo_url')
                             }
-                            match_photos_to_results(ai_results.get('recommendations', []), raw_places, live_events_data, _places_photo_map)
+                            match_photos_to_results(ai_results.get('recommendations', []), _all_places, live_events_data, _places_photo_map)
 
                             # Deduplicate by normalized venue name
                             import re as _re
