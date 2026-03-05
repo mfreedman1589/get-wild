@@ -1350,54 +1350,65 @@ Return JSON with a 'recommendations' array. Each item: name, tier_name, category
         
     return json.loads(raw_content)
 
-def match_photos_to_results(recommendations, raw_places, live_events=None):
-    # Build event image lookup keyed by normalised title
+def match_photos_to_results(recommendations, raw_places, live_events=None, places_photo_map=None):
+    # Build event image lookup keyed by normalised title AND venue_name
+    # (AI sometimes uses the venue name rather than the event title)
     event_images = {}
     for ev in (live_events or []):
+        img = ev.get('image_url')
+        if not img:
+            continue
         title = ev.get('title', '').lower().replace(' ', '')
-        if title and ev.get('image_url'):
-            event_images[title] = ev['image_url']
+        venue = ev.get('venue_name', '').lower().replace(' ', '')
+        if title:
+            event_images[title] = img
+        if venue:
+            event_images.setdefault(venue, img)  # title takes priority if both match
 
-    # Build Google Places photo lookup (validated via HEAD request)
-    place_photos = {}
-    for place in (raw_places or []):
-        name = place.get('displayName', {}).get('text', '').lower().replace(' ', '')
-        if name and place.get('photo_url'):
-            url = place['photo_url']
-            try:
-                r = requests.head(url, timeout=3)
-                if r.status_code == 200:
-                    place_photos[name] = url
-            except:
-                pass
+    # Build Places photo lookup — use pre-built map if provided (no HEAD requests needed),
+    # otherwise build from raw_places with HEAD validation as fallback
+    if places_photo_map is not None:
+        place_photos = {k.lower().replace(' ', ''): v for k, v in places_photo_map.items() if v}
+    else:
+        place_photos = {}
+        for place in (raw_places or []):
+            name = place.get('displayName', {}).get('text', '').lower().replace(' ', '')
+            if name and place.get('photo_url'):
+                url = place['photo_url']
+                try:
+                    r = requests.head(url, timeout=3)
+                    if r.status_code == 200:
+                        place_photos[name] = url
+                except:
+                    pass
 
     for rec in recommendations:
         rec_name = rec.get('name', '').lower().replace(' ', '')
 
-        # 1. Exact event title match
+        # 1. Exact event title / venue_name match
         if rec_name in event_images:
             rec['photo_url'] = event_images[rec_name]
             continue
 
-        # 2. Partial event title match
+        # 2. Partial event match (substring either direction)
         ev_matched = False
-        for ev_title, ev_img in event_images.items():
-            if ev_title in rec_name or rec_name in ev_title:
+        for ev_key, ev_img in event_images.items():
+            if ev_key in rec_name or rec_name in ev_key:
                 rec['photo_url'] = ev_img
                 ev_matched = True
                 break
         if ev_matched:
             continue
 
-        # 3. Google Places exact match
+        # 3. Exact Places match
         if rec_name in place_photos:
             rec['photo_url'] = place_photos[rec_name]
             continue
 
-        # 4. Google Places partial match
+        # 4. Partial Places match (substring either direction)
         matched = False
-        for place_name, url in place_photos.items():
-            if place_name in rec_name or rec_name in place_name:
+        for place_key, url in place_photos.items():
+            if place_key in rec_name or rec_name in place_key:
                 rec['photo_url'] = url
                 matched = True
                 break
@@ -1506,7 +1517,11 @@ def render_spot_card(spot, location_input, user_id, index, mode):
         spontaneity_badge = ''
 
     # Event time line shown below venue name (Ticketmaster events only)
-    is_event = bool(spot.get('image_url')) or any(k in (category or '') for k in ['Event', 'Music', 'Sports', 'Concert', 'Arts'])
+    _cat_lower = (category or '').lower()
+    is_event = bool(spot.get('image_url')) or any(k in _cat_lower for k in [
+        'event', 'music', 'sports', 'concert', 'arts', 'entertainment',
+        'concert hall', 'performing arts', 'theater', 'arena', 'stadium',
+    ])
     event_time_html = ''
     if is_event and start_time and start_time != 'Time TBD':
         time_line = f"🕐 {start_time}"
@@ -2077,7 +2092,12 @@ else:
                                 lat=lat, lng=lng, radius_miles=st.session_state.mem_dist,
                                 preference_scores=pref_scores
                             )
-                            match_photos_to_results(ai_results.get('recommendations', []), raw_places, live_events_data)
+                            _places_photo_map = {
+                                place.get('displayName', {}).get('text', '').lower().strip(): place.get('photo_url')
+                                for place in (raw_places or [])
+                                if place.get('photo_url')
+                            }
+                            match_photos_to_results(ai_results.get('recommendations', []), raw_places, live_events_data, _places_photo_map)
                             st.session_state.current_results = ai_results
                             try:
                                 supabase.table('recommendation_cache').insert({
