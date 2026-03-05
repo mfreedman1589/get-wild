@@ -534,6 +534,15 @@ def build_semantic_query(filters_dict, profile, preference_scores=None, mode=Non
     no_food = food == "No Food Needed"
     is_free = spend == "🆓 Free"
 
+    # Free budget: override all other query logic — only genuinely free venues
+    if is_free:
+        if vibe == "Outside":
+            return "free park free trail free nature area free waterfront free botanical garden public plaza"
+        elif vibe == "Inside":
+            return "free museum free art gallery free library free community center free indoor attraction"
+        else:
+            return "free park free museum free trail free public attraction no admission free community event"
+
     # Base query by vibe + food + spend (randomized for freshness)
     if vibe == "Outside":
         if is_free:
@@ -934,6 +943,14 @@ def get_wild_idea(user_id_str, lat, lng, location_name, profile_summary):
 def get_ai_recommendations(raw_places, live_events_data, weather_report, filters_dict, location_name, target_date_str, relative_day, profile, excluded_spots, favorite_spots, mode="top_3", tier_personalities=None, lat=None, lng=None, radius_miles=20, preference_scores=None):
     client = OpenAI(api_key=OPENAI_API_KEY)
     
+    _spend_filter = filters_dict.get('spend', '💰 Moderate')
+    _PAID_LEVELS = {"PRICE_LEVEL_MODERATE", "PRICE_LEVEL_EXPENSIVE", "PRICE_LEVEL_VERY_EXPENSIVE"}
+    _PREMIUM_LEVELS = {"PRICE_LEVEL_EXPENSIVE", "PRICE_LEVEL_VERY_EXPENSIVE"}
+    if isinstance(raw_places, list):
+        if _spend_filter == "🆓 Free":
+            raw_places = [p for p in raw_places if p.get('priceLevel') not in _PAID_LEVELS]
+        elif _spend_filter == "✨ Splurge":
+            raw_places = sorted(raw_places, key=lambda p: 0 if p.get('priceLevel') in _PREMIUM_LEVELS else 1)
     trimmed_places = raw_places[:8] if isinstance(raw_places, list) and len(raw_places) > 8 else raw_places
     if isinstance(live_events_data, list):
         safe_events_data = live_events_data[:6]
@@ -1023,8 +1040,10 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
     elif _group == "Family Outing":
         group_rule = (
             "GROUP RULE: This is a FAMILY OUTING. "
-            "NEVER recommend bars, nightclubs, or adult-only venues. "
-            "All results must be welcoming to children."
+            "NEVER recommend breweries, bars, cocktail lounges, taprooms, nightclubs, or any alcohol-focused venue — "
+            "children cannot enter many of these. "
+            "Prioritize: museums, parks, family entertainment venues, restaurants with kids menus, outdoor activities. "
+            "Any venue whose primary purpose is alcohol service is FORBIDDEN for this group."
         )
     elif _group == "Solo":
         group_rule = (
@@ -1037,17 +1056,25 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
 
     _spend = filters_dict.get('spend', '💰 Moderate')
     if _spend == "🆓 Free":
-        budget_rule = (
-            "BUDGET RULE: User wants FREE options only. Every recommendation must be free or have no cover charge. "
-            "No paid admission venues, no expensive restaurants."
+        free_absolute_rule = (
+            "ABSOLUTE RULE — FREE BUDGET: The user has selected FREE. This means ZERO cost to enter or participate. "
+            "You must ONLY recommend: public parks, trails, nature areas, free museums (Smithsonian, public galleries), "
+            "free community events, free outdoor spaces (waterfronts, plazas, botanical gardens that are free), "
+            "window shopping areas, free markets. "
+            "NEVER recommend: breweries, bars, restaurants, paid attractions, escape rooms, bowling, "
+            "or ANY venue that charges money. "
+            "If the Places data contains no free venues, say so explicitly and recommend the best free public spaces in the area instead."
         )
-    elif _spend == "✨ Splurge":
-        budget_rule = (
-            "BUDGET RULE: User is splurging. Prioritize upscale, impressive, high-end experiences. "
-            "Avoid casual or budget spots."
-        )
-    else:
         budget_rule = ""
+    else:
+        free_absolute_rule = ""
+        if _spend == "✨ Splurge":
+            budget_rule = (
+                "BUDGET RULE: User is splurging. Prioritize upscale, impressive, high-end experiences. "
+                "Avoid casual or budget spots."
+            )
+        else:
+            budget_rule = ""
 
     price_rule = (
         "PRICE MATCHING: Each venue in the Google Places data includes a priceLevel field. "
@@ -1129,7 +1156,7 @@ CONTEXT: {location_name} | {weather_report} | {target_date_str} ({relative_day})
 {profile_context}{taste_context}
 {blacklist_context}
 RULES:
-{geo_rule}
+{f"0. {free_absolute_rule}" + chr(10) if free_absolute_rule else ""}{geo_rule}
 {events_rule}
 3. EVENTS DATE CHECK: Only events with date_verified=True on {relative_day} ({target_date_str}) are eligible. why_its_perfect must include venue name and address. Never fabricate event details.
 {weather_rule}
