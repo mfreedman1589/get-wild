@@ -479,11 +479,29 @@ def build_semantic_query(filters_dict, profile, preference_scores=None, mode=Non
     spend = filters_dict.get('spend', '$ Moderate')
     is_get_wild = (mode == "get_wild")
 
+    # Activity keyword triggers — override base query entirely
+    _ACTIVITY_TRIGGERS = [
+        ({"hike", "hiking"},              "hiking trails trailheads nature walks"),
+        ({"bike", "biking", "cycling"},   "bike trails cycling paths greenways"),
+        ({"kayak", "paddle", "canoe"},    "kayak rental canoe paddle water sports"),
+        ({"climb", "climbing"},           "rock climbing gym bouldering climbing wall"),
+        ({"axe"},                         "axe throwing venue"),
+        ({"escape"},                      "escape room puzzle room"),
+        ({"pottery", "ceramics"},         "pottery studio ceramics class art studio"),
+        ({"comedy"},                      "comedy club stand up improv"),
+        ({"trivia"},                      "trivia night bar pub quiz"),
+        ({"karaoke"},                     "karaoke bar singing venue"),
+    ]
+
     # If specific keyword provided, it drives the query
     if specific:
+        _spec_lower = specific.lower()
+        # Check activity keyword triggers first (highest priority)
+        for _kws, _override in _ACTIVITY_TRIGGERS:
+            if any(kw in _spec_lower for kw in _kws):
+                return _override
         loc_hint = {"Date": "intimate", "Family Outing": "family-friendly", "Friends": "lively"}.get(group, "")
         # Check if specific matches a known non-traditional type and boost it
-        _spec_lower = specific.lower()
         _nt_match = next(
             (t for t in NON_TRADITIONAL_INDOOR + NON_TRADITIONAL_OUTDOOR if t in _spec_lower or _spec_lower in t),
             None
@@ -512,34 +530,80 @@ def build_semantic_query(filters_dict, profile, preference_scores=None, mode=Non
     no_food = food == "No Food Needed"
     is_free = spend == "🆓 Free"
 
-    # Base query by vibe + food + spend
+    # Base query by vibe + food + spend (randomized for freshness)
     if vibe == "Outside":
         if is_free:
             base = "free parks hiking trails nature reserves free outdoor spaces scenic viewpoints"
         elif food == "Full Meal":
-            base = "restaurants with nice patios"
+            base = random.choice([
+                "restaurants with scenic views outdoor dining",
+                "farm to table restaurants with outdoor seating",
+                "waterfront dining outdoor patios",
+                "winery vineyard outdoor dining",
+                "rooftop restaurants with views",
+            ])
         elif food == "Just Drinks/Coffee":
-            base = "wineries, cocktail bars with patios, or upscale breweries"
+            base = random.choice([
+                "outdoor bars with views beer gardens patios",
+                "wineries with outdoor seating",
+                "rooftop bars outdoor cocktail venues",
+                "breweries with outdoor spaces",
+            ])
         else:
-            base = "parks, botanical gardens, hiking trails, scenic outdoor activities, nature reserves"
+            base = random.choice([
+                "hiking trails nature trails scenic walks",
+                "bike trails greenways riverside paths",
+                "botanical gardens arboretums nature preserves",
+                "scenic overlooks viewpoints hidden natural spots",
+                "kayak canoe paddleboard rental outdoor water activities",
+                "rock climbing outdoor climbing walls bouldering",
+                "disc golf ultimate frisbee outdoor recreation",
+                "farms orchards agritourism outdoor experiences",
+            ])
     elif vibe == "Inside":
         if is_free:
             base = "free museums free art galleries free community spaces free attractions"
         elif food == "Full Meal":
-            base = "highly rated restaurants"
+            base = random.choice([
+                "highly rated restaurants unique dining experiences",
+                "chef driven restaurants local cuisine",
+                "immersive dining experiences unique restaurants",
+                "farm to table restaurants locally sourced",
+            ])
         elif food == "Just Drinks/Coffee":
-            base = "wine bars, speakeasies, or lounges"
+            base = random.choice([
+                "wine bars speakeasies cocktail lounges",
+                "craft cocktail bars hidden bars",
+                "whiskey bars wine bars tasting rooms",
+            ])
         else:
-            base = "museums, art galleries, science centers, escape rooms, bowling alleys, entertainment venues, unique attractions"
+            base = random.choice([
+                "escape rooms puzzle rooms immersive experiences",
+                "axe throwing bowling arcade bars entertainment",
+                "pottery studios art classes paint and sip",
+                "comedy clubs improv theaters live entertainment",
+                "climbing gyms trampoline parks active entertainment",
+                "board game cafes trivia nights social games",
+                "cooking classes culinary experiences food tours",
+                "virtual reality arcades gaming lounges",
+            ])
     else:  # Doesn't Matter
         if is_free:
             base = "free activities free entertainment free museums free parks"
         elif food == "Full Meal":
-            base = "highly rated restaurants"
+            base = random.choice([
+                "highly rated restaurants unique dining experiences",
+                "chef driven restaurants local cuisine",
+                "immersive dining experiences unique restaurants",
+            ])
         elif food == "Just Drinks/Coffee":
-            base = "wine bars, speakeasies, or lounges"
+            base = "wine bars speakeasies lounges cocktail bars"
         else:
-            base = "museums, parks, entertainment venues, unique attractions, or outdoor experiences"
+            base = random.choice([
+                "museums parks entertainment venues unique attractions",
+                "outdoor experiences unique activities local favorites",
+                "escape rooms art galleries parks unique venues",
+            ])
 
     # Spend-level suffix modifiers
     if is_free:
@@ -604,7 +668,18 @@ def _run_places_query(text_query, lat, lng, radius_miles, page_size=8):
         pass
     return []
 
-def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
+_OUTDOOR_QUERY_POOL = [
+    "hiking trail nature trail scenic walk",
+    "bike trail greenway rail trail cycling path",
+    "scenic overlook viewpoint panoramic view",
+    "nature preserve wildlife area conservation area",
+    "waterfall swimming hole natural swimming area",
+    "botanical garden arboretum nature park",
+    "kayak canoe rental water sports outdoor",
+    "rock climbing bouldering outdoor climbing",
+]
+
+def fetch_places_semantic(semantic_query, lat, lng, radius_miles, vibe="", food=""):
     threshold = radius_miles * 1.5
 
     _JUST_OPENED_KWS = {"new", "just opened", "grand opening", "opening soon",
@@ -640,8 +715,14 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
             out.append(place)
         return out
 
-    main_places   = _run_places_query(semantic_query, lat, lng, radius_miles, page_size=8)
-    fresh_places  = _run_places_query(f"new opening pop-up unique hidden", lat, lng, radius_miles, page_size=3)
+    main_places  = _run_places_query(semantic_query, lat, lng, radius_miles, page_size=8)
+    fresh_places = _run_places_query("new opening pop-up unique hidden", lat, lng, radius_miles, page_size=3)
+
+    # Secondary outdoor queries when context calls for it
+    outdoor_extra = []
+    if vibe == "Outside" and food == "No Food Needed":
+        for q in random.sample(_OUTDOOR_QUERY_POOL, 2):
+            outdoor_extra.extend(_run_places_query(q, lat, lng, radius_miles, page_size=3))
 
     seen_names = set()
     result = []
@@ -652,6 +733,12 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles):
     for p in _process(fresh_places, freshness_boost=True):
         name = (p.get('displayName', {}).get('text') or '').lower()
         if name and name not in seen_names:
+            seen_names.add(name)
+            result.append(p)
+    for p in _process(outdoor_extra, freshness_boost=False):
+        name = (p.get('displayName', {}).get('text') or '').lower()
+        if name and name not in seen_names:
+            p['outdoor_boost'] = True
             seen_names.add(name)
             result.append(p)
     return result
@@ -1357,7 +1444,7 @@ async def gather_all_data(lat, lng, semantic_query, distance, target_date_str, u
         return []
 
     weather_task   = asyncio.to_thread(get_live_weather, lat, lng)
-    places_task    = asyncio.to_thread(fetch_places_semantic, semantic_query, lat, lng, distance)
+    places_task    = asyncio.to_thread(fetch_places_semantic, semantic_query, lat, lng, distance, vibe, food)
     excluded_task  = asyncio.to_thread(get_excluded_spots, user_id)
     favorites_task = asyncio.to_thread(get_favorite_spots, user_id)
     prefs_task     = asyncio.to_thread(get_user_preference_scores, user_id)
