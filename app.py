@@ -544,6 +544,23 @@ def build_semantic_query(filters_dict, profile, preference_scores=None, mode=Non
         else:
             return "free park free museum free trail free public attraction no admission free community event"
 
+    # Full Meal anchor: always return a restaurant-focused query (overrides vibe-based branching)
+    if food == "Full Meal":
+        _fm_group_map = {
+            "Family Outing": "family restaurant kid friendly dining",
+            "Date":          "romantic restaurant fine dining intimate",
+            "Friends":       "lively restaurant group dining social",
+            "Solo":          "restaurant bar solo dining counter seating",
+        }
+        _fm_base = _fm_group_map.get(group, "restaurant dining local eats")
+        if spend == "✨ Splurge":
+            _fm_base = f"upscale restaurant fine dining tasting menu {_fm_base}"
+        if vibe == "Outside":
+            _fm_base = f"outdoor dining patio restaurant {_fm_base}"
+        elif vibe == "Inside":
+            _fm_base = f"cozy restaurant indoor dining {_fm_base}"
+        return _fm_base.strip()
+
     # Base query by vibe + food + spend (randomized for freshness)
     if vibe == "Outside":
         if is_free:
@@ -1095,12 +1112,16 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
                        for ex in _excl_lower)
         ]
     trimmed_places = raw_places[:8] if isinstance(raw_places, list) and len(raw_places) > 8 else raw_places
-    if isinstance(live_events_data, list):
-        safe_events_data = live_events_data[:6]
+    # Python-level events gate — AI never sees events when food=Full Meal
+    _food_filter = filters_dict.get('food', '')
+    if _food_filter == 'Full Meal':
+        safe_events_data = []  # hard gate: no events, regardless of what was fetched
+    elif isinstance(live_events_data, list):
+        safe_events_data = live_events_data[:1]  # cap at 1 event to prevent AI over-indexing
     elif isinstance(live_events_data, str):
         safe_events_data = live_events_data[:4000]
     else:
-        safe_events_data = live_events_data
+        safe_events_data = []
 
     profile_context = ""
     if profile:
@@ -1336,7 +1357,11 @@ Return JSON with a 'recommendations' array. Each item: name, tier_name, category
             response_format={ "type": "json_object" },
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"GOOGLE PLACES DATA: {json.dumps(trimmed_places)}\n\nLIVE TICKETMASTER EVENTS:\n{json.dumps(safe_events_data) if isinstance(safe_events_data, list) else safe_events_data}"}
+                {"role": "user", "content": (
+                    f"=== PRIMARY DATA (Google Places — use these first) ===\n{json.dumps(trimmed_places)}\n\n"
+                    f"=== SUPPLEMENTARY DATA (Live Events — max 1 slot, only if food filter allows) ===\n"
+                    f"{json.dumps(safe_events_data) if isinstance(safe_events_data, list) else safe_events_data}"
+                )}
             ],
             max_tokens=2500,
             timeout=30
@@ -2102,6 +2127,26 @@ else:
                                 if place.get('photo_url')
                             }
                             match_photos_to_results(ai_results.get('recommendations', []), raw_places, live_events_data, _places_photo_map)
+
+                            # Deduplicate by normalized venue name
+                            import re as _re
+                            def _norm_name(n):
+                                n = (n or '').lower().strip()
+                                n = _re.sub(r"^the\s+", "", n)
+                                n = _re.sub(r"[^\w\s]", "", n)
+                                return n.strip()
+                            _seen_names, _deduped, _had_dupe = set(), [], False
+                            for _rec in ai_results.get('recommendations', []):
+                                _key = _norm_name(_rec.get('name', ''))
+                                if _key not in _seen_names:
+                                    _seen_names.add(_key)
+                                    _deduped.append(_rec)
+                                else:
+                                    _had_dupe = True
+                            ai_results['recommendations'] = _deduped
+                            if _had_dupe:
+                                st.warning("⚠️ Some duplicate venues were removed. Try 🔀 Shuffle for more variety.")
+
                             st.session_state.current_results = ai_results
                             try:
                                 supabase.table('recommendation_cache').insert({
