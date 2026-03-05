@@ -727,7 +727,7 @@ def fetch_places_semantic(semantic_query, lat, lng, radius_miles, vibe="", food=
             out.append(place)
         return out
 
-    main_places  = _run_places_query(semantic_query, lat, lng, radius_miles, page_size=8)
+    main_places  = _run_places_query(semantic_query, lat, lng, radius_miles, page_size=12)
     fresh_places = _run_places_query("new opening pop-up unique hidden", lat, lng, radius_miles, page_size=3)
 
     # Secondary outdoor queries when context calls for it
@@ -1224,19 +1224,21 @@ def get_ai_recommendations(raw_places, live_events_data, weather_report, filters
             budget_rule = ""
 
     price_rule = (
-        "PRICE MATCHING: Each venue in the Google Places data includes a priceLevel field. "
+        "PRICE PREFERENCE: Each venue includes a priceLevel field. "
         f"The user's spend filter is '{_spend}'. "
-        "Cross-reference priceLevel with the spend filter: "
-        "PRICE_LEVEL_FREE→🆓 Free, PRICE_LEVEL_INEXPENSIVE/MODERATE→💰 Moderate, "
+        "Cross-reference: PRICE_LEVEL_FREE→🆓 Free, PRICE_LEVEL_INEXPENSIVE/MODERATE→💰 Moderate, "
         "PRICE_LEVEL_EXPENSIVE/VERY_EXPENSIVE→✨ Splurge. "
-        "Strongly prefer venues whose priceLevel matches. "
-        "NEVER recommend a PRICE_LEVEL_EXPENSIVE venue for a Free or Affordable search."
+        "Strongly prefer venues whose priceLevel matches the filter. "
+        "If insufficient price-matched venues exist in the data, use the best available options "
+        "and note the approximate price in why_its_perfect."
     )
 
     _intended_time = filters_dict.get('time', 'this evening')
     hours_rule = (
-        f"HOURS RULE: If a venue's currentOpeningHours data shows it is CLOSED at the user's intended time ({_intended_time}), "
-        "do NOT recommend it. Only recommend venues that are open or have no hours data available."
+        f"HOURS PREFERENCE: Prefer venues that are open at the user's intended time ({_intended_time}). "
+        "If currentOpeningHours shows a venue is definitively closed, prefer alternatives when they exist. "
+        "If hours data is unavailable or ambiguous, include the venue — assume it may be open. "
+        "If no clearly-open venues remain after other constraints, use the best available options regardless of hours."
     )
 
     hidden_gem_mandate = (
@@ -1308,11 +1310,11 @@ RULES:
 3. EVENTS DATE CHECK: Only events with date_verified=True on {relative_day} ({target_date_str}) are eligible. why_its_perfect must include venue name and address. Never fabricate event details.
 {weather_rule}
 5. NO HALLUCINATION: Use exact addresses and URLs from input data. Never invent.
-6. MANDATORY VARIETY RULE: The 3 recommendations MUST come from different venue categories. Specifically:
-   - No two results can share the same primary category (e.g. two bars, two breweries, two restaurants of the same cuisine type)
-   - At least one result should be non-food/drink focused if food filter is 'No Food Needed' or 'Just Drinks/Coffee'
-   - If the Places data only contains one venue type, acknowledge this in why_its_perfect rather than returning 3 of the same thing
-   - Never return 3 events; Google Places must provide the backbone of variety
+6. VARIETY PREFERENCE: Strongly prefer recommendations from different venue categories when the data allows. Specifically:
+   - Avoid two venues from the exact same subcategory (two identical bar types, two of the same cuisine) when alternatives exist in the data
+   - If food filter is 'No Food Needed' or 'Just Drinks/Coffee', try to include at least one non-food venue
+   - Avoid returning 3 events — Google Places should provide most results
+   - If the available data genuinely has limited variety, it is acceptable to use the same category — returning 3 results is always more important than strict variety
 {f"7. {group_rule}" if group_rule else ""}
 {f"8. {budget_rule}" if budget_rule else ""}
 9. {price_rule}
@@ -1323,6 +1325,8 @@ RULES:
 {specific_rule}
 
 {instruction}
+
+FALLBACK: If strict rules leave fewer than 3 valid options, relax non-critical preferences (variety, price matching, hours) to ensure exactly 3 recommendations are always returned. It is always better to return 3 slightly imperfect results than 1 perfect result. Never return fewer than 3.
 
 Return JSON with a 'recommendations' array. Each item: name, tier_name, category, address (exact), why_its_perfect (2-3 sentences), vibe_check (3 words), matched_tags (2-3 strings; mandatory if specific given), website, lat, lng, spontaneity_score (integer 1-10 using this strict rubric — DO NOT inflate scores: 1-2=mainstream chain or famous landmark everyone knows (Smithsonian, Cheesecake Factory, Central Park); 3-4=solid local spot most people have heard of or would immediately think to Google (neighborhood brewery, popular brunch spot, well-known hiking trail); 5-6=genuinely interesting find that most people wouldn't think of themselves but is easy to enjoy (rooftop bar with no reservations needed, lesser-known gallery, unique food hall); 7-8=surprisingly unconventional or hard-to-discover — requires insider knowledge or creative thinking (hidden speakeasy, axe throwing bar, ceramics class, underground supper club); 9-10=truly rare, unexpected, or brand-new — most locals haven't heard of it yet (pop-up experience, brand-new venue in soft opening, extremely niche activity). A small local museum scores 3-4. A neighborhood park scores 2-3. A bowling alley scores 5. Axe throwing scores 7. A brand-new pop-up art installation scores 9.)"""
 
