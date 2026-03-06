@@ -176,6 +176,26 @@ custom_css = """
     .material-symbols-outlined,
     .material-symbols-sharp { font-family: 'Material Symbols Rounded' !important; }
 
+    /* Keyword filter pill — match segmented control style */
+    .gw-kw-anchor + div .stButton > button {
+        color: #2d6a4f !important;
+        border-color: #c8e6c9 !important;
+        background: #eaf5ef !important;
+        border-radius: 10px !important;
+        font-size: 13px !important;
+        font-weight: 600 !important;
+        min-height: 38px !important;
+        padding: 6px 16px !important;
+    }
+    /* Feedback button — compact icon-only circle */
+    .gw-fb-anchor + div .stButton > button {
+        width: 40px !important;
+        min-height: 40px !important;
+        padding: 0 !important;
+        border-radius: 50% !important;
+        font-size: 18px !important;
+    }
+
     /* APP BACKGROUND */
     .stApp { background-color: #f4faf6 !important; }
     @media (prefers-color-scheme: dark) { .stApp { background-color: #0d1f15 !important; } }
@@ -2145,7 +2165,8 @@ with _hero_col:
 """, unsafe_allow_html=True)
 with _fb_col:
     _fb_user_id = st.session_state.user.id if st.session_state.get('user') else None
-    if st.button("💬 Feedback", key="fb_toggle"):
+    st.markdown('<div class="gw-fb-anchor"></div>', unsafe_allow_html=True)
+    if st.button("💬", key="fb_toggle"):
         st.session_state.show_feedback_form = not st.session_state.show_feedback_form
 
 if st.session_state.show_feedback_form:
@@ -2453,7 +2474,8 @@ else:
             ui_dist = st.slider("📍 Max Distance (Miles)", 1, 20, st.session_state.mem_dist)
 
             # Row 7: Specific keyword (optional)
-            if st.button("🔍 Add a specific keyword (optional)", type="secondary", use_container_width=False, key="kw_toggle"):
+            st.markdown('<div class="gw-kw-anchor"></div>', unsafe_allow_html=True)
+            if st.button("🔍 Looking for Something Specific?", type="secondary", use_container_width=False, key="kw_toggle"):
                 st.session_state.show_keyword = not st.session_state.show_keyword
             if st.session_state.show_keyword:
                 ui_spec = st.text_input("Keyword", value=st.session_state.mem_spec, placeholder="e.g., 'romantic', 'live jazz', 'axe throwing'", label_visibility="collapsed")
@@ -2679,7 +2701,9 @@ else:
                         map_data.append({"lat": spot['lat'], "lon": spot['lng'], "name": display_name, "map_url": spot_map_url})
                 
                 if map_data:
-                    with st.expander("🗺️ View on Map"):
+                    if st.button("🗺️ View on Map", type="secondary", key="map_toggle"):
+                        st.session_state['show_map_view'] = not st.session_state.get('show_map_view', False)
+                    if st.session_state.get('show_map_view', False):
                         layer = pdk.Layer(
                             'ScatterplotLayer',
                             data=map_data,
@@ -2739,7 +2763,9 @@ else:
         )
 
         # ── B) RECENT ACTIVITY ──────────────────────────────────────────
-        with st.expander("📋 Recent Activity"):
+        if st.button("📋 Recent Activity", type="secondary", key="activity_toggle"):
+            st.session_state['show_recent_activity'] = not st.session_state.get('show_recent_activity', False)
+        if st.session_state.get('show_recent_activity', False):
             try:
                 _ledger = supabase.table('points_ledger').select('*').eq('user_id', _uid).order('created_at', desc=True).limit(10).execute().data or []
             except:
@@ -2829,7 +2855,9 @@ else:
 
         _locked = [b for b in BADGES if b['id'] not in _earned_ids]
         if _locked:
-            with st.expander(f"🔒 Locked Badges ({len(_locked)} remaining)"):
+            if st.button(f"🔒 {len(_locked)} Locked Badges", type="secondary", key="locked_badges_toggle"):
+                st.session_state['show_locked_badges'] = not st.session_state.get('show_locked_badges', False)
+            if st.session_state.get('show_locked_badges', False):
                 _cells = [
                     f'<div style="background:#f5f5f5;border-radius:12px;padding:12px 6px;text-align:center;opacity:0.65;">'
                     f'<div style="font-size:28px;line-height:1.2;filter:grayscale(1);">{b["emoji"]}</div>'
@@ -2984,7 +3012,10 @@ else:
                         unsafe_allow_html=True
                     )
                 icon = "🚫" if saved['rating'] == 1 else "📍"
-                with st.expander(f"{icon} {saved['spot_name']}"):
+                _spot_key = f"show_spot_{saved['id']}"
+                if st.button(f"{icon} {saved['spot_name']}", type="secondary", use_container_width=True, key=f"spot_toggle_{saved['id']}"):
+                    st.session_state[_spot_key] = not st.session_state.get(_spot_key, False)
+                if st.session_state.get(_spot_key, False):
                     st.caption(saved['address'])
 
                     with st.form(f"rate_form_{saved['id']}"):
