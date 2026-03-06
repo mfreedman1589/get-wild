@@ -22,7 +22,12 @@ from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_not_e
 TIER_1_NAMES = ["The Sure Thing", "The Crowd Pleaser", "The Local Favorite", "The Classic", "The Reliable"]
 TIER_2_NAMES = ["The Fresh Take", "The Curveball", "The Surprise", "The Interesting Pick", "The Plot Twist"]
 TIER_3_NAMES = ["The Hidden Gem", "The Wild Card", "The Adventure", "The Deep Cut", "The Discovery"]
-_ALL_TIER_NAMES = frozenset(TIER_1_NAMES + TIER_2_NAMES + TIER_3_NAMES)
+_ALL_TIER_NAMES = frozenset(
+    TIER_1_NAMES + TIER_2_NAMES + TIER_3_NAMES +
+    [n.replace("The ", "").strip() for n in TIER_1_NAMES + TIER_2_NAMES + TIER_3_NAMES] +
+    [n.lower() for n in TIER_1_NAMES + TIER_2_NAMES + TIER_3_NAMES] +
+    [n.replace("The ", "").strip().lower() for n in TIER_1_NAMES + TIER_2_NAMES + TIER_3_NAMES]
+)
 
 NON_TRADITIONAL_INDOOR = [
     "escape room", "axe throwing", "pottery studio", "art class",
@@ -163,9 +168,12 @@ st.set_page_config(page_title="Get Wild", page_icon="🌿", layout="centered")
 custom_css = """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=block');
 
     /* BASE FONT */
     * { font-family: 'Plus Jakarta Sans', sans-serif !important; }
+    /* Restore icon fonts so Material icons don't show as ghost text */
+    .material-symbols-rounded { font-family: 'Material Symbols Rounded' !important; }
 
     /* APP BACKGROUND */
     .stApp { background-color: #f4faf6 !important; }
@@ -259,6 +267,23 @@ custom_css = """
         0%, 100% { box-shadow: 0 0 20px rgba(45,106,79,0.4), 0 0 40px rgba(45,106,79,0.2); }
         50%       { box-shadow: 0 0 30px rgba(45,106,79,0.6), 0 0 60px rgba(45,106,79,0.3); }
     }
+
+    /* GPS COMPONENT — hide white box, show only the icon button */
+    [data-testid="stCustomComponentV1"] { overflow: hidden !important; }
+    [data-testid="stCustomComponentV1"] iframe {
+        width: 48px !important;
+        height: 48px !important;
+        border: none !important;
+        background: transparent !important;
+    }
+
+    /* TEXT CONTRAST */
+    .wc-address { color: #4a5568 !important; }
+    button[data-testid="stBaseButton-secondary"] { color: #1a1a1a !important; }
+    .stSelectbox label, .stRadio > label, [data-testid="stWidgetLabel"] { color: #374151 !important; }
+
+    /* FEEDBACK POPOVER — constrain width, no stretch */
+    [data-testid="stPopover"] > div > button { width: auto !important; min-width: 0 !important; padding: 8px 14px !important; }
 
     /* Hide Streamlit chrome */
     #MainMenu {visibility: hidden;}
@@ -2097,7 +2122,7 @@ async def gather_all_data(lat, lng, places_input, distance, target_date_str, use
 # ==========================================
 # 6. UI ROUTING
 # ==========================================
-_hero_col, _fb_col = st.columns([9, 1])
+_hero_col, _fb_col = st.columns([6, 1])
 with _hero_col:
     st.markdown("""
 <div class="gw-header">
