@@ -168,25 +168,9 @@ st.set_page_config(page_title="Get Wild", page_icon="🌿", layout="centered")
 custom_css = """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
-    @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
 
     /* BASE FONT */
     * { font-family: 'Plus Jakarta Sans', sans-serif !important; }
-
-    /* MATERIAL SYMBOLS — allow Streamlit icons to render correctly */
-    .material-symbols-rounded {
-        font-family: 'Material Symbols Rounded' !important;
-        font-weight: normal !important;
-        font-style: normal !important;
-        font-size: 20px !important;
-        line-height: 1 !important;
-        letter-spacing: normal !important;
-        text-transform: none !important;
-        display: inline-block !important;
-        white-space: nowrap !important;
-        word-wrap: normal !important;
-        direction: ltr !important;
-    }
 
     /* APP BACKGROUND */
     .stApp { background-color: #f4faf6 !important; }
@@ -298,9 +282,6 @@ custom_css = """
     button[data-testid="stBaseButton-secondary"] { color: #1a1a1a !important; }
     .stSelectbox label, .stRadio > label, [data-testid="stWidgetLabel"] { color: #374151 !important; }
 
-    /* FEEDBACK POPOVER — constrain width, no stretch */
-    [data-testid="stPopover"] > div > button { width: auto !important; min-width: 0 !important; padding: 8px 14px !important; }
-
     /* Hide Streamlit chrome */
     #MainMenu {visibility: hidden;}
     header[data-testid="stHeader"] {visibility: hidden;}
@@ -342,6 +323,8 @@ if 'wild_idea_cache_key' not in st.session_state: st.session_state.wild_idea_cac
 if 'show_welcome_bonus' not in st.session_state: st.session_state.show_welcome_bonus = False
 if 'badges_backfilled' not in st.session_state: st.session_state.badges_backfilled = False
 if 'is_loading' not in st.session_state: st.session_state.is_loading = False
+if 'show_feedback_form' not in st.session_state: st.session_state.show_feedback_form = False
+if 'show_keyword' not in st.session_state: st.session_state.show_keyword = False
 if 'referral_code' not in st.session_state:
     st.session_state.referral_code = st.query_params.get("ref", "")
 
@@ -2151,20 +2134,30 @@ with _hero_col:
 """, unsafe_allow_html=True)
 with _fb_col:
     _fb_user_id = st.session_state.user.id if st.session_state.get('user') else None
-    with st.popover("💬 Feedback"):
+    if st.button("💬 Feedback", key="fb_toggle"):
+        st.session_state.show_feedback_form = not st.session_state.show_feedback_form
+
+if st.session_state.show_feedback_form:
+    with st.container():
         st.markdown("**What's on your mind?**")
         st.caption("Bug, idea, or general feedback — we read everything.")
         st.text_area("", placeholder="Type here...", label_visibility="collapsed", key="fb_textarea")
-        if st.button("Send Feedback", type="primary", use_container_width=True, key="fb_submit"):
-            _fb_comment = st.session_state.get("fb_textarea", "")
-            if not _fb_comment.strip():
-                st.warning("Please write something before sending.")
-            else:
-                _fb_result = submit_feedback(_fb_user_id, _fb_comment)
-                if _fb_result is True:
-                    st.toast("✅ Feedback sent! Thank you.")
+        _fb_c1, _fb_c2 = st.columns([3, 1])
+        with _fb_c1:
+            if st.button("Send Feedback", type="primary", use_container_width=True, key="fb_submit"):
+                _fb_comment = st.session_state.get("fb_textarea", "")
+                if not _fb_comment.strip():
+                    st.warning("Please write something before sending.")
                 else:
-                    st.error(f"DB error: {_fb_result}")
+                    _fb_result = submit_feedback(_fb_user_id, _fb_comment)
+                    if _fb_result is True:
+                        st.session_state.show_feedback_form = False
+                        st.toast("✅ Feedback sent! Thank you.")
+                    else:
+                        st.error(f"DB error: {_fb_result}")
+        with _fb_c2:
+            if st.button("Cancel", use_container_width=True, key="fb_cancel"):
+                st.session_state.show_feedback_form = False
 
 if st.session_state.user is None:
     st.write("---")
@@ -2449,8 +2442,12 @@ else:
             ui_dist = st.slider("📍 Max Distance (Miles)", 1, 20, st.session_state.mem_dist)
 
             # Row 7: Specific keyword (optional)
-            with st.expander("🔍 Specific keyword? (Optional)", expanded=False):
+            if st.button("🔍 Add a specific keyword (optional)", type="secondary", use_container_width=False, key="kw_toggle"):
+                st.session_state.show_keyword = not st.session_state.show_keyword
+            if st.session_state.show_keyword:
                 ui_spec = st.text_input("Keyword", value=st.session_state.mem_spec, placeholder="e.g., 'romantic', 'live jazz', 'axe throwing'", label_visibility="collapsed")
+            else:
+                ui_spec = st.session_state.mem_spec
 
             st.write("---")
             
