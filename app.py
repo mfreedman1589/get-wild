@@ -2619,8 +2619,6 @@ else:
         if not st.session_state.get('badges_backfilled'):
             check_and_award_badges(_uid, silent=True)
             st.session_state.badges_backfilled = True
-            _db_check = supabase.table('badges').select('*').eq('user_id', _uid).execute()
-            st.write(f"DEBUG badges in DB: {_db_check.data}")
 
         # ── A) POINTS HERO ──────────────────────────────────────────────
         wild_tally = current_prof.get('wild_tally', 0)
