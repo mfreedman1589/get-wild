@@ -168,12 +168,9 @@ st.set_page_config(page_title="Get Wild", page_icon="🌿", layout="centered")
 custom_css = """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
-    @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=block');
 
     /* BASE FONT */
     * { font-family: 'Plus Jakarta Sans', sans-serif !important; }
-    /* Restore icon fonts so Material icons don't show as ghost text */
-    .material-symbols-rounded { font-family: 'Material Symbols Rounded' !important; }
 
     /* APP BACKGROUND */
     .stApp { background-color: #f4faf6 !important; }
@@ -239,7 +236,8 @@ custom_css = """
     /* ACTION BUTTONS */
     .stButton > button { font-weight: 700 !important; min-height: 48px !important; border-radius: 12px !important; }
     button[data-testid="stBaseButton-primary"] { color: white !important; }
-    button[data-testid="stBaseButton-primary"] * { color: white !important; }
+    button[data-testid="stBaseButton-primary"] p,
+    button[data-testid="stBaseButton-primary"] span { color: white !important; }
 
     /* POINTS HERO (Rewards tab) */
     .gw-points-hero { background: linear-gradient(135deg, #2d6a4f, #52b788); border-radius: 16px; padding: 24px; text-align: center; color: white; margin-bottom: 16px; }
