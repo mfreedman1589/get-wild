@@ -171,8 +171,10 @@ custom_css = """
 
     /* BASE FONT */
     * { font-family: 'Plus Jakarta Sans', sans-serif !important; }
-    /* Streamlit bundles Material Symbols — exempt it from the * override */
-    .material-symbols-rounded { font-family: 'Material Symbols Rounded' !important; }
+    /* Streamlit bundles Material Symbols — exempt all variants from the * override */
+    .material-symbols-rounded,
+    .material-symbols-outlined,
+    .material-symbols-sharp { font-family: 'Material Symbols Rounded' !important; }
 
     /* APP BACKGROUND */
     .stApp { background-color: #f4faf6 !important; }
@@ -236,7 +238,7 @@ custom_css = """
     [data-testid="stSegmentedControl"] label { font-weight: 600 !important; font-size: 13px !important; }
 
     /* ACTION BUTTONS */
-    .stButton > button { font-weight: 700 !important; min-height: 48px !important; border-radius: 12px !important; }
+    .stButton > button { font-weight: 700 !important; min-height: 48px !important; border-radius: 12px !important; white-space: nowrap !important; }
     button[data-testid*="primary"],
     button[data-testid*="primary"] *,
     button[data-testid*="primary"] p,
@@ -271,13 +273,20 @@ custom_css = """
     }
 
     /* GPS COMPONENT — hide white box, show only the icon button */
-    [data-testid="stCustomComponentV1"] { overflow: hidden !important; }
+    [data-testid="stCustomComponentV1"] {
+        overflow: hidden !important;
+        background: transparent !important;
+        width: 48px !important;
+        max-width: 48px !important;
+    }
     [data-testid="stCustomComponentV1"] iframe {
         width: 48px !important;
         height: 48px !important;
         border: none !important;
         background: transparent !important;
     }
+    /* Hide empty column containers (can appear as white boxes) */
+    [data-testid="stColumn"]:empty { display: none !important; }
 
     /* TEXT CONTRAST */
     .wc-address { color: #4a5568 !important; }
