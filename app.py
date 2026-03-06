@@ -1384,14 +1384,25 @@ def render_wild_idea_card(idea, location_input, user_id):
 
     # Tags
     tags_html = ''
+    if isinstance(tags, str):
+        tags = [t.strip() for t in tags.split(',') if t.strip()]
+    elif isinstance(tags, dict):
+        tags = [v for v in tags.values() if isinstance(v, str)]
     if isinstance(tags, list):
         for tag in tags[:3]:
+            if not isinstance(tag, str):
+                continue
             if tag in _ALL_TIER_NAMES:
                 continue
             tags_html += f'<span class="wc-tag">✓ {tag}</span>'
 
     # Vibe pills (matches render_spot_card)
-    _vibe_words = [w.strip() for w in vibe.split(',') if w.strip()] if vibe else []
+    if isinstance(vibe, list):
+        _vibe_words = [w.strip() for w in vibe if isinstance(w, str) and w.strip()]
+    elif isinstance(vibe, str):
+        _vibe_words = [w.strip() for w in vibe.split(',') if w.strip()]
+    else:
+        _vibe_words = []
     if _vibe_words:
         _pills = [f'<span class="wc-vibe-pill">{"✨ " if i == 0 else ""}{w}</span>'
                   for i, w in enumerate(_vibe_words)]
@@ -1944,7 +1955,11 @@ def render_spot_card(spot, location_input, user_id, index, mode):
     if matched_tags:
         if isinstance(matched_tags, str):
             matched_tags = [t.strip() for t in matched_tags.split(',') if t.strip()]
+        elif isinstance(matched_tags, dict):
+            matched_tags = [v for v in matched_tags.values() if isinstance(v, str)]
         for tag in matched_tags:
+            if not isinstance(tag, str):
+                continue
             if tag in _ALL_TIER_NAMES:
                 continue
             tags_html += f'<span class="wc-tag">✓ {tag}</span>'
@@ -1969,7 +1984,12 @@ def render_spot_card(spot, location_input, user_id, index, mode):
         _tier_color = "#2d6a4f"  # get_wild / Spontaneous Adventure
 
     # Vibe check pills
-    _vibe_words = [w.strip() for w in vibe.split(',') if w.strip()] if vibe else []
+    if isinstance(vibe, list):
+        _vibe_words = [w.strip() for w in vibe if isinstance(w, str) and w.strip()]
+    elif isinstance(vibe, str):
+        _vibe_words = [w.strip() for w in vibe.split(',') if w.strip()]
+    else:
+        _vibe_words = []
     if _vibe_words:
         _pills = [f'<span class="wc-vibe-pill">{"✨ " if i == 0 else ""}{w}</span>'
                   for i, w in enumerate(_vibe_words)]
