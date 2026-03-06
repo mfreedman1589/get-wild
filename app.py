@@ -130,6 +130,13 @@ custom_css = """
         0%, 100% { box-shadow: 0 0 20px rgba(45,106,79,0.4), 0 0 40px rgba(45,106,79,0.2); }
         50%       { box-shadow: 0 0 30px rgba(45,106,79,0.6), 0 0 60px rgba(45,106,79,0.3); }
     }
+
+    /* Hide Streamlit chrome */
+    #MainMenu {visibility: hidden;}
+    header[data-testid="stHeader"] {visibility: hidden;}
+    footer {visibility: hidden;}
+    [data-testid="stToolbar"] {visibility: hidden;}
+    [data-testid="stDecoration"] {visibility: hidden;}
 </style>
 """
 st.markdown(custom_css, unsafe_allow_html=True)
@@ -1031,8 +1038,8 @@ def _dismiss_wild_idea(user_id):
         pass
 
 @st.cache_data(ttl=14400)
-def get_wild_idea(user_id_str, lat, lng, location_name, profile_summary):
-    """Returns a full card-ready dict or None. Cached 4 h."""
+def get_wild_idea(user_id_str, lat, lng, location_name, profile_summary, pref_keywords=None, radius_miles=20):
+    """Returns a full card-ready dict or None. Uses real Google Places data. Cached 4h."""
     try:
         h = datetime.utcnow().hour
         if 6 <= h < 12:       time_context = "morning"
@@ -1040,77 +1047,69 @@ def get_wild_idea(user_id_str, lat, lng, location_name, profile_summary):
         elif 17 <= h < 21:    time_context = "evening"
         else:                 time_context = "late night"
 
+        # Build Places query — personalized by top preference keyword if available
+        kw_prefix = f"unique {pref_keywords[0]}" if pref_keywords else "unique hidden"
+        places_query = f"{kw_prefix} local experience {location_name}"
+
+        # Fetch real Places results
+        raw_places = fetch_places_semantic(places_query, lat, lng, radius_miles)
+        if not raw_places:
+            return None
+
+        # Build a slim candidate list for GPT (name + category hint only)
+        candidates = []
+        for p in raw_places[:5]:
+            candidates.append({
+                "name":     (p.get('displayName', {}).get('text') or ''),
+                "summary":  (p.get('editorialSummary', {}).get('text') or ''),
+                "address":  (p.get('formattedAddress') or ''),
+            })
+
+        # Ask GPT to pick the most surprising option from real data
         client = OpenAI(api_key=OPENAI_API_KEY)
+        pref_clause = (
+            f" for someone who enjoys {profile_summary}"
+            if profile_summary and profile_summary != "no specific preferences" else ""
+        )
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             response_format={"type": "json_object"},
             messages=[{"role": "user", "content": (
-                f"You are a spontaneous local guide. Based on the time of day ({time_context}) "
-                f"and this user's preferences ({profile_summary}), suggest ONE specific, "
-                f"surprising local activity or venue near {location_name} (lat={lat:.3f}, lng={lng:.3f}). "
-                "Be specific and exciting. "
-                "Return JSON with exactly these keys: "
-                "name (specific venue name), "
-                "category (venue type, e.g. 'Escape Room', 'Jazz Club', 'Craft Brewery'), "
-                "why_now (one punchy 'why this, why tonight' sentence, max 15 words), "
-                "emoji (single emoji representing the vibe), "
-                "address (best known street address, or empty string if unknown), "
-                "spontaneity_score (integer 1-10: 1-2=famous landmark everyone knows, "
-                "3-4=popular local spot, 5-6=interesting find most wouldn't think of, "
-                "7-8=unconventional insider knowledge, 9-10=truly rare or brand new), "
-                "matched_tags (JSON array of 2-3 short descriptor strings, "
-                "e.g. [\"Unique Experience\", \"No Reservation\", \"Date Night\"])."
+                f"From this list of real local venues near {location_name}, pick the ONE most "
+                f"surprising and delightful option for a {time_context} outing{pref_clause}. "
+                "Prefer unconventional, unique, or hidden gems over mainstream choices. "
+                f"Venues: {json.dumps(candidates)}. "
+                "Return JSON: name (exact venue name from the list), "
+                "category (concise venue type, e.g. 'Escape Room', 'Jazz Club'), "
+                "why_now (one punchy why-this-why-tonight sentence, max 15 words), "
+                "emoji (single emoji), "
+                "matched_tags (array of 2-3 short descriptor strings)."
             )}],
-            max_tokens=220,
+            max_tokens=200,
             timeout=10,
         )
         data = json.loads(response.choices[0].message.content.strip())
-        if not all(k in data for k in ("name", "category", "why_now", "emoji")):
+        if not data.get('name') or not data.get('why_now'):
             return None
 
-        # Normalize optional fields
+        # Match chosen name back to real Places data for address, website, photo
+        chosen_name = (data['name'] or '').lower().strip()
+        matched = next(
+            (p for p in raw_places[:5]
+             if chosen_name in (p.get('displayName', {}).get('text') or '').lower()),
+            raw_places[0]
+        )
+        data['address']  = matched.get('formattedAddress') or ''
+        data['website']  = matched.get('websiteUri') or ''
+        data['photo_url'] = matched.get('photo_url')
+        data['vibe_check'] = ''
+
         if not isinstance(data.get('matched_tags'), list):
             data['matched_tags'] = []
-        try:
-            data['spontaneity_score'] = int(data.get('spontaneity_score', 5))
-        except:
-            data['spontaneity_score'] = 5
-        if not isinstance(data.get('address'), str):
-            data['address'] = ''
-
-        # Fetch a Google Places photo for the venue
-        data['photo_url'] = None
-        try:
-            places_url = "https://places.googleapis.com/v1/places:searchText"
-            payload = {"textQuery": f"{data['name']} {location_name}", "maxResultCount": 1}
-            headers = {
-                "Content-Type": "application/json",
-                "X-Goog-Api-Key": GOOGLE_API_KEY,
-                "X-Goog-FieldMask": "places.photos,places.formattedAddress",
-            }
-            r = requests.post(places_url, json=payload, headers=headers, timeout=5)
-            if r.status_code == 200:
-                places = r.json().get('places', [])
-                if places:
-                    photos = places[0].get('photos', [])
-                    if photos:
-                        photo_name = photos[0].get('name', '')
-                        if photo_name:
-                            photo_url = (
-                                f"https://places.googleapis.com/v1/{photo_name}/media"
-                                f"?key={GOOGLE_API_KEY}&maxHeightPx=400&maxWidthPx=800"
-                            )
-                            try:
-                                head_r = requests.head(photo_url, timeout=3)
-                                if head_r.status_code == 200:
-                                    data['photo_url'] = photo_url
-                            except:
-                                pass
-                    # Grab address if GPT didn't provide one
-                    if not data['address']:
-                        data['address'] = places[0].get('formattedAddress', '')
-        except:
-            pass
+        if not data.get('emoji'):
+            data['emoji'] = '🎲'
+        if not data.get('category'):
+            data['category'] = ''
 
         return data
     except:
@@ -1118,51 +1117,64 @@ def get_wild_idea(user_id_str, lat, lng, location_name, profile_summary):
     return None
 
 def render_wild_idea_card(idea, location_input, user_id):
-    """Renders the wild idea as a full result card with three action buttons."""
+    """Renders the wild idea as a full result card, matching render_spot_card() layout."""
     name     = idea.get('name', 'Wild Idea')
     category = idea.get('category', '')
     why_now  = idea.get('why_now', '')
     emoji    = idea.get('emoji', '🎲')
     address  = idea.get('address', '')
-    score    = idea.get('spontaneity_score', 5)
+    website  = idea.get('website', '') or ''
+    vibe     = idea.get('vibe_check', '')
     tags     = idea.get('matched_tags', [])
 
     img_url = idea.get('photo_url') or get_fallback_image(category, why_now)
 
-    try:    score = int(score)
-    except: score = 5
-    if score >= 7:
-        spont_badge = (' <span style="font-size:0.65rem;background:#e65100;color:#fff;'
-                       'padding:2px 7px;border-radius:10px;font-weight:700;vertical-align:middle;">'
-                       '🔥 Wild Choice</span>')
-    elif score >= 4:
-        spont_badge = (' <span style="font-size:0.65rem;background:#1565c0;color:#fff;'
-                       'padding:2px 7px;border-radius:10px;font-weight:700;vertical-align:middle;">'
-                       '⚡ Interesting Pick</span>')
-    else:
-        spont_badge = ''
-
+    # Tags
     tags_html = ''
     if isinstance(tags, list):
         for tag in tags[:3]:
             tags_html += f'<span class="wc-tag">✓ {tag}</span>'
 
-    search_q = urllib.parse.quote(f"{name} {location_input}")
-    map_url  = f"https://www.google.com/maps/search/?api=1&query={search_q}"
-    addr_html    = f'<div class="wc-address">📍 {address}</div>' if address else ''
-    utility_html = (f'<div class="wc-utility">'
-                    f'<a href="{map_url}" target="_blank" class="wc-util-link">🗺️ Directions</a>'
-                    f'</div>')
+    # Vibe pills (matches render_spot_card)
+    _vibe_words = [w.strip() for w in vibe.split(',') if w.strip()] if vibe else []
+    if _vibe_words:
+        _pills = [f'<span class="wc-vibe-pill">{"✨ " if i == 0 else ""}{w}</span>'
+                  for i, w in enumerate(_vibe_words)]
+        vibe_pills_html = '<div class="wc-vibe-row">' + ''.join(_pills) + '</div>'
+    else:
+        vibe_pills_html = ''
+
+    # Full utility row (matches render_spot_card)
+    search_q       = urllib.parse.quote(f"{name} {location_input}")
+    map_url        = f"https://www.google.com/maps/search/?api=1&query={search_q}"
+    encoded_addr   = urllib.parse.quote(address) if address else ''
+    uber_url       = f"https://m.uber.com/ul/?action=setPickup&pickup=my_location&dropoff[formatted_address]={encoded_addr}"
+    share_text     = f"Let's go to {name}! {address}\n{map_url}"
+    share_encoded  = urllib.parse.quote(share_text)
+    share_subj_enc = urllib.parse.quote(f"Wild Plan: {name}")
+    share_body_enc = urllib.parse.quote(share_text)
+    sep = '<span class="wc-util-sep">|</span>'
+    website_part = f'<a href="{website}" target="_blank" class="wc-util-link">🌐 Website</a>{sep}' if website else ''
+    utility_html = (
+        f'<div class="wc-utility">'
+        f'{website_part}'
+        f'<a href="{map_url}" target="_blank" class="wc-util-link">🗺️ Directions</a>{sep}'
+        f'<a href="{uber_url}" target="_blank" class="wc-util-link">🚗 Uber</a>{sep}'
+        f'<a href="sms:?body={share_encoded}" class="wc-util-link">📱 Text</a>{sep}'
+        f'<a href="mailto:?subject={share_subj_enc}&body={share_body_enc}" class="wc-util-link">📧 Email</a>'
+        f'</div>'
+    )
+    addr_html = f'<div class="wc-address">📍 {address}</div>' if address else ''
 
     html_card = f"""<div class="wc-shell">
   <div class="wc-img-wrap">
     <img src="{img_url}" class="wc-img" alt="">
-    <div class="wc-tier">✦ Wild Idea</div>
+    <div class="wc-tier" style="border-left: 3px solid #2d6a4f;">✦ Wild Idea</div>
   </div>
   <div class="wc-body">
     <div class="wc-name">{emoji} {name}</div>
-    <div class="wc-meta">{category}{spont_badge}</div>
-    {addr_html}
+    <div class="wc-meta">{category}</div>
+    {vibe_pills_html}{addr_html}
     {utility_html}
     <hr class="wc-hr">
     <p class="wc-pitch">{why_now}</p>
@@ -2038,8 +2050,13 @@ else:
                             if user_profile.get('dietary_restrictions'): _prof_parts.append(user_profile['dietary_restrictions'])
                         _prof_summary = ", ".join(_prof_parts) if _prof_parts else "no specific preferences"
 
+                        _wi_pref_scores = get_user_preference_scores(st.session_state.user.id)
+                        _wi_kws = tuple((_wi_pref_scores.get('top_keywords') or [])[:2]) if _wi_pref_scores else None
+
                         _idea = get_wild_idea(
-                            str(st.session_state.user.id), _wi_lat, _wi_lng, _wi_loc, _prof_summary
+                            str(st.session_state.user.id), _wi_lat, _wi_lng, _wi_loc, _prof_summary,
+                            pref_keywords=_wi_kws,
+                            radius_miles=st.session_state.get('mem_dist', 20),
                         )
                         if _idea:
                             st.markdown(
