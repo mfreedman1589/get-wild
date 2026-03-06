@@ -168,9 +168,25 @@ st.set_page_config(page_title="Get Wild", page_icon="🌿", layout="centered")
 custom_css = """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
 
     /* BASE FONT */
     * { font-family: 'Plus Jakarta Sans', sans-serif !important; }
+
+    /* MATERIAL SYMBOLS — allow Streamlit icons to render correctly */
+    .material-symbols-rounded {
+        font-family: 'Material Symbols Rounded' !important;
+        font-weight: normal !important;
+        font-style: normal !important;
+        font-size: 20px !important;
+        line-height: 1 !important;
+        letter-spacing: normal !important;
+        text-transform: none !important;
+        display: inline-block !important;
+        white-space: nowrap !important;
+        word-wrap: normal !important;
+        direction: ltr !important;
+    }
 
     /* APP BACKGROUND */
     .stApp { background-color: #f4faf6 !important; }
@@ -235,8 +251,10 @@ custom_css = """
 
     /* ACTION BUTTONS */
     .stButton > button { font-weight: 700 !important; min-height: 48px !important; border-radius: 12px !important; }
-    button[data-testid="stBaseButton-primary"] { color: white !important; }
+    button[data-testid="stBaseButton-primary"],
+    button[data-testid="stBaseButton-primary"] *,
     button[data-testid="stBaseButton-primary"] p,
+    button[data-testid="stBaseButton-primary"] div,
     button[data-testid="stBaseButton-primary"] span { color: white !important; }
 
     /* POINTS HERO (Rewards tab) */
