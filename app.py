@@ -248,6 +248,8 @@ if 'skip_cache' not in st.session_state: st.session_state.skip_cache = False
 if 'show_onboarding' not in st.session_state: st.session_state.show_onboarding = False
 if 'wild_idea_dismissed' not in st.session_state: st.session_state.wild_idea_dismissed = False
 if 'wild_idea_expanded' not in st.session_state: st.session_state.wild_idea_expanded = False
+if 'wild_idea_cache' not in st.session_state: st.session_state.wild_idea_cache = None
+if 'wild_idea_cache_key' not in st.session_state: st.session_state.wild_idea_cache_key = None
 if 'show_welcome_bonus' not in st.session_state: st.session_state.show_welcome_bonus = False
 if 'badges_backfilled' not in st.session_state: st.session_state.badges_backfilled = False
 if 'is_loading' not in st.session_state: st.session_state.is_loading = False
@@ -1172,9 +1174,8 @@ def _dismiss_wild_idea(user_id):
     except:
         pass
 
-@st.cache_data(ttl=14400)
-def get_wild_idea(user_id_str, lat, lng, location_name, profile_summary, pref_keywords=None, radius_miles=20, excluded_spots=()):
-    """Returns a full card-ready dict or None. Uses real Google Places data. Cached 4h."""
+def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary, pref_keywords=None, radius_miles=20, excluded_spots=()):
+    """Returns a full card-ready dict or None. Uses real Google Places data."""
     try:
         h = datetime.utcnow().hour
         if 6 <= h < 12:       time_context = "morning"
@@ -2261,15 +2262,19 @@ else:
                         _wi_kws = tuple((_wi_pref_scores.get('top_keywords') or [])[:2]) if _wi_pref_scores else None
                         _wi_excluded = tuple(get_excluded_spots(st.session_state.user.id))
 
-                        _wi_placeholder = st.empty()
-                        _wi_placeholder.info("💡 Finding your wild idea...")
-                        _idea = get_wild_idea(
-                            str(st.session_state.user.id), _wi_lat, _wi_lng, _wi_loc, _prof_summary,
-                            pref_keywords=_wi_kws,
-                            radius_miles=st.session_state.get('mem_dist', 20),
-                            excluded_spots=_wi_excluded,
-                        )
-                        _wi_placeholder.empty()
+                        _wi_cache_key = f"{st.session_state.user.id}_{_wi_loc}_{_wi_kws}"
+                        if st.session_state.get('wild_idea_cache_key') != _wi_cache_key:
+                            _wi_placeholder = st.empty()
+                            _wi_placeholder.info("💡 Finding your wild idea...")
+                            st.session_state.wild_idea_cache = get_wild_idea_uncached(
+                                str(st.session_state.user.id), _wi_lat, _wi_lng, _wi_loc, _prof_summary,
+                                pref_keywords=_wi_kws,
+                                radius_miles=st.session_state.get('mem_dist', 20),
+                                excluded_spots=_wi_excluded,
+                            )
+                            st.session_state.wild_idea_cache_key = _wi_cache_key
+                            _wi_placeholder.empty()
+                        _idea = st.session_state.wild_idea_cache
                         if _idea:
                             st.markdown(
                                 '<div style="font-size:0.72rem;font-weight:700;letter-spacing:1.2px;'
