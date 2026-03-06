@@ -22,6 +22,7 @@ from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_not_e
 TIER_1_NAMES = ["The Sure Thing", "The Crowd Pleaser", "The Local Favorite", "The Classic", "The Reliable"]
 TIER_2_NAMES = ["The Fresh Take", "The Curveball", "The Surprise", "The Interesting Pick", "The Plot Twist"]
 TIER_3_NAMES = ["The Hidden Gem", "The Wild Card", "The Adventure", "The Deep Cut", "The Discovery"]
+_ALL_TIER_NAMES = frozenset(TIER_1_NAMES + TIER_2_NAMES + TIER_3_NAMES)
 
 NON_TRADITIONAL_INDOOR = [
     "escape room", "axe throwing", "pottery studio", "art class",
@@ -477,6 +478,7 @@ def get_user_badge_stats(user_id):
 def check_and_award_badges(user_id):
     try:
         stats  = get_user_badge_stats(user_id)
+        st.write(f"DEBUG badge stats: {stats}")
         earned = {b['badge_id'] for b in (supabase.table('badges').select('badge_id').eq('user_id', user_id).execute().data or [])}
         for badge in BADGES:
             if badge['id'] in earned:
@@ -1264,6 +1266,8 @@ def render_wild_idea_card(idea, location_input, user_id):
     tags_html = ''
     if isinstance(tags, list):
         for tag in tags[:3]:
+            if tag in _ALL_TIER_NAMES:
+                continue
             tags_html += f'<span class="wc-tag">✓ {tag}</span>'
 
     # Vibe pills (matches render_spot_card)
@@ -1630,7 +1634,7 @@ RULES:
 
 {instruction}
 
-FALLBACK: If strict rules leave fewer than 3 valid options, relax non-critical preferences (variety, price matching, hours) to ensure exactly 3 recommendations are always returned. It is always better to return 3 slightly imperfect results than 1 perfect result. Never return fewer than 3.
+{'' if mode == 'get_wild' else 'FALLBACK: If strict rules leave fewer than 3 valid options, relax non-critical preferences (variety, price matching, hours) to ensure exactly 3 recommendations are always returned. It is always better to return 3 slightly imperfect results than 1 perfect result. Never return fewer than 3.'}
 
 Return JSON with a 'recommendations' array. Each item: name, tier_name, category, address (exact), why_its_perfect (2-3 sentences), vibe_check (3 words), matched_tags (2-3 strings; mandatory if specific given), website, lat, lng, spontaneity_score (integer 1-10 using this strict rubric — DO NOT inflate scores: 1-2=mainstream chain or famous landmark everyone knows (Smithsonian, Cheesecake Factory, Central Park); 3-4=solid local spot most people have heard of or would immediately think to Google (neighborhood brewery, popular brunch spot, well-known hiking trail); 5-6=genuinely interesting find that most people wouldn't think of themselves but is easy to enjoy (rooftop bar with no reservations needed, lesser-known gallery, unique food hall); 7-8=surprisingly unconventional or hard-to-discover — requires insider knowledge or creative thinking (hidden speakeasy, axe throwing bar, ceramics class, underground supper club); 9-10=truly rare, unexpected, or brand-new — most locals haven't heard of it yet (pop-up experience, brand-new venue in soft opening, extremely niche activity). A small local museum scores 3-4. A neighborhood park scores 2-3. A bowling alley scores 5. Axe throwing scores 7. A brand-new pop-up art installation scores 9.)"""
 
@@ -1667,7 +1671,12 @@ Return JSON with a 'recommendations' array. Each item: name, tier_name, category
     elif raw_content.startswith("```"):
         raw_content = raw_content[3:-3].strip()
         
-    return json.loads(raw_content)
+    result = json.loads(raw_content)
+    if mode == "get_wild":
+        recs = result.get("recommendations") or []
+        if len(recs) > 1:
+            result["recommendations"] = recs[:1]
+    return result
 
 def match_photos_to_results(recommendations, raw_places, live_events=None, places_photo_map=None):
     # Build event image lookup keyed by normalised title AND venue_name
@@ -1816,6 +1825,8 @@ def render_spot_card(spot, location_input, user_id, index, mode):
         if isinstance(matched_tags, str):
             matched_tags = [t.strip() for t in matched_tags.split(',') if t.strip()]
         for tag in matched_tags:
+            if tag in _ALL_TIER_NAMES:
+                continue
             tags_html += f'<span class="wc-tag">✓ {tag}</span>'
 
     tier_name  = spot.get('tier_name', 'Top Pick')
@@ -2203,11 +2214,12 @@ else:
                         _wi_pref_scores = get_user_preference_scores(st.session_state.user.id)
                         _wi_kws = tuple((_wi_pref_scores.get('top_keywords') or [])[:2]) if _wi_pref_scores else None
 
-                        _idea = get_wild_idea(
-                            str(st.session_state.user.id), _wi_lat, _wi_lng, _wi_loc, _prof_summary,
-                            pref_keywords=_wi_kws,
-                            radius_miles=st.session_state.get('mem_dist', 20),
-                        )
+                        with st.spinner("💡 Finding your wild idea..."):
+                            _idea = get_wild_idea(
+                                str(st.session_state.user.id), _wi_lat, _wi_lng, _wi_loc, _prof_summary,
+                                pref_keywords=_wi_kws,
+                                radius_miles=st.session_state.get('mem_dist', 20),
+                            )
                         if _idea:
                             st.markdown(
                                 '<div style="font-size:0.72rem;font-weight:700;letter-spacing:1.2px;'
