@@ -162,13 +162,34 @@ st.set_page_config(page_title="Get Wild", page_icon="🌿", layout="centered")
 
 custom_css = """
 <style>
-    /* HERO */
-    .hero-header { text-align: center; padding: 2rem 0 1rem 0; }
-    .hero-title { color: #2e7d32; font-family: 'Helvetica Neue', sans-serif; font-size: 3.5rem; font-weight: 800; letter-spacing: -1px; text-transform: uppercase; margin-bottom: 0; line-height: 1.1; }
-    .hero-subtitle { color: #558b2f; font-size: 1.2rem; font-weight: 400; letter-spacing: 1px; margin-top: 10px; }
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 
-    /* CARD */
+    /* BASE FONT */
+    * { font-family: 'Plus Jakarta Sans', sans-serif !important; }
+
+    /* APP BACKGROUND */
+    .stApp { background-color: #f4faf6 !important; }
+    @media (prefers-color-scheme: dark) { .stApp { background-color: #0d1f15 !important; } }
+
+    /* BRANDED HEADER */
+    .gw-header { padding: 20px 0 8px 0; text-align: center; }
+    .gw-logo { display: flex; align-items: center; justify-content: center; gap: 8px; }
+    .gw-logo-icon { font-size: 32px; }
+    .gw-logo-text { font-size: 32px; font-weight: 800; color: #2d6a4f; letter-spacing: -0.5px; }
+    .gw-tagline { font-size: 13px; color: #6b7280; font-weight: 500; margin-top: 2px; letter-spacing: 0.3px; }
+
+    /* CARD CONTAINER */
     .wc-shell { overflow: hidden; animation: fadeSlideUp 0.5s ease-out forwards; }
+    [data-testid="stVerticalBlockBorderWrapper"] {
+        border-radius: 16px !important;
+        box-shadow: 0 2px 16px rgba(0,0,0,0.07) !important;
+        background: #ffffff !important;
+        border-left: 3px solid #2d6a4f !important;
+        overflow: hidden !important;
+    }
+    @media (prefers-color-scheme: dark) {
+        [data-testid="stVerticalBlockBorderWrapper"] { background: #1a2e20 !important; }
+    }
 
     /* Card inner content */
     .wc-img-wrap { position: relative; width: 100%; height: 200px; overflow: hidden; }
@@ -176,7 +197,7 @@ custom_css = """
     .wc-tier { position: absolute; bottom: 10px; left: 12px; background: rgba(0,0,0,0.75); color: #fff; font-size: 0.875rem; font-weight: 600; letter-spacing: 0.5px; padding: 5px 10px; border-radius: 20px; text-transform: uppercase; }
 
     .wc-body { padding: 16px; }
-    .wc-name { font-size: 20px; font-weight: 700; color: #1a1a1a; margin: 0 0 5px 0; line-height: 1.3; }
+    .wc-name { font-size: 19px; font-weight: 700; color: #1a1a1a; margin: 0 0 5px 0; line-height: 1.3; }
     .wc-meta { font-size: 0.78rem; color: #888; margin-bottom: 4px; font-weight: 500; }
     .wc-vibe-row { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
     .wc-vibe-pill { font-size: 12px; color: #444; background: #f0f0f0; border-radius: 12px; padding: 3px 10px; font-weight: 500; }
@@ -192,6 +213,30 @@ custom_css = """
     .wc-util-link:hover { color: #555; text-decoration: underline; }
     .wc-util-sep { color: #ddd; padding: 0 4px; font-size: 0.78rem; }
 
+    /* TAB BAR */
+    [data-testid="stTabs"] button {
+        font-weight: 600 !important;
+        font-size: 14px !important;
+        color: #6b7280 !important;
+    }
+    [data-testid="stTabs"] button[aria-selected="true"] {
+        color: #2d6a4f !important;
+        font-weight: 700 !important;
+    }
+
+    /* SEGMENTED CONTROLS (pill filters) */
+    [data-testid="stSegmentedControl"] { background: #eaf5ef !important; border-radius: 10px !important; }
+    [data-testid="stSegmentedControl"] label { font-weight: 600 !important; font-size: 13px !important; }
+
+    /* ACTION BUTTONS */
+    .stButton > button { font-weight: 700 !important; min-height: 48px !important; border-radius: 12px !important; }
+
+    /* POINTS HERO (Rewards tab) */
+    .gw-points-hero { background: linear-gradient(135deg, #2d6a4f, #52b788); border-radius: 16px; padding: 24px; text-align: center; color: white; margin-bottom: 16px; }
+    .gw-points-hero .pts-num { font-size: 48px; font-weight: 800; color: white; line-height: 1.1; }
+    .gw-points-hero .pts-label { font-size: 14px; color: rgba(255,255,255,0.8); margin-top: 2px; }
+    .gw-points-hero .pts-tally { font-size: 13px; color: rgba(255,255,255,0.7); margin-top: 6px; }
+
     /* Dark mode */
     @media (prefers-color-scheme: dark) {
         .stTextInput > label, .stSelectbox > label, .stRadio > label,
@@ -204,6 +249,7 @@ custom_css = """
         .wc-util-link { color: #666 !important; }
         .wc-util-link:hover { color: #999 !important; }
         .wc-tag { background: #1a3320 !important; border-color: #2a5230 !important; }
+        .gw-tagline { color: #9ca3af !important; }
     }
 
     @keyframes fadeSlideUp { from {opacity: 0; transform: translateY(20px);} to { opacity: 1; transform: translateY(0); } }
@@ -2052,9 +2098,12 @@ async def gather_all_data(lat, lng, places_input, distance, target_date_str, use
 _hero_col, _fb_col = st.columns([9, 1])
 with _hero_col:
     st.markdown("""
-<div class="hero-header">
-    <h1 class="hero-title">Get Wild</h1>
-    <p class="hero-subtitle">Disconnect. Explore. Connect.</p>
+<div class="gw-header">
+  <div class="gw-logo">
+    <span class="gw-logo-icon">🌿</span>
+    <span class="gw-logo-text">Get Wild</span>
+  </div>
+  <div class="gw-tagline">Your spontaneous local guide</div>
 </div>
 """, unsafe_allow_html=True)
 with _fb_col:
@@ -2628,9 +2677,10 @@ else:
         # ── A) POINTS HERO ──────────────────────────────────────────────
         wild_tally = current_prof.get('wild_tally', 0)
         st.markdown(
-            f'<div style="text-align:center;padding:24px 0 12px 0;">'
-            f'<div style="font-size:32px;font-weight:800;color:#2d6a4f;letter-spacing:-0.5px;">⚡ {user_points} Wild Points</div>'
-            f'<div style="font-size:14px;color:#888;margin-top:6px;">🗺️ {wild_tally} spots explored</div>'
+            f'<div class="gw-points-hero">'
+            f'<div class="pts-num">⚡ {user_points}</div>'
+            f'<div class="pts-label">Wild Points</div>'
+            f'<div class="pts-tally">🗺️ {wild_tally} spots explored</div>'
             f'</div>',
             unsafe_allow_html=True,
         )
