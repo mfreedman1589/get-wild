@@ -250,6 +250,7 @@ if 'wild_idea_dismissed' not in st.session_state: st.session_state.wild_idea_dis
 if 'wild_idea_expanded' not in st.session_state: st.session_state.wild_idea_expanded = False
 if 'show_welcome_bonus' not in st.session_state: st.session_state.show_welcome_bonus = False
 if 'badges_backfilled' not in st.session_state: st.session_state.badges_backfilled = False
+if 'is_loading' not in st.session_state: st.session_state.is_loading = False
 if 'referral_code' not in st.session_state:
     st.session_state.referral_code = st.query_params.get("ref", "")
 
@@ -2170,7 +2171,37 @@ else:
         st.success("🎉 Welcome bonus! You got 5 Wild Points for joining via invite!")
         st.session_state.show_welcome_bonus = False
 
-    tab_explore, tab_profile, tab_saved = st.tabs(["🌍 Explore", "👤 My Profile", "⭐ Saved Spots"])
+    # ── FULL-SCREEN LOADING OVERLAY ─────────────────────────────────────
+    if st.session_state.get('is_loading'):
+        _lmsg = random.choice([
+            "Scouting the scene...", "Finding your vibe...", "Asking the locals...",
+            "Uncovering hidden gems...", "Getting the inside scoop...",
+            "Curating your experience...", "Almost there...", "Worth the wait...",
+        ])
+        st.markdown(f"""<style>
+@keyframes wc-overlay-pulse {{
+  0%, 100% {{ transform: scale(1); opacity: 1; }}
+  50% {{ transform: scale(1.2); opacity: 0.7; }}
+}}
+.wc-overlay {{
+  position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+  background: linear-gradient(160deg, #0a1f14 0%, #1a3c2d 100%);
+  z-index: 99999; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+}}
+.wc-overlay-emoji {{ font-size: 60px; animation: wc-overlay-pulse 1.5s ease-in-out infinite; margin-bottom: 16px; }}
+.wc-overlay-title {{ color: #fff; font-size: 28px; font-weight: 800; letter-spacing: -0.5px; margin-bottom: 12px; }}
+.wc-overlay-msg {{ color: #52b788; font-size: 18px; font-weight: 500; margin-bottom: 40px; }}
+.wc-overlay-hint {{ color: #2d6a4f; font-size: 12px; position: absolute; bottom: 48px; }}
+</style>
+<div class="wc-overlay">
+  <div class="wc-overlay-emoji">🌿</div>
+  <div class="wc-overlay-title">Get Wild</div>
+  <div class="wc-overlay-msg">{_lmsg}</div>
+  <div class="wc-overlay-hint">This usually takes 5–10 seconds</div>
+</div>""", unsafe_allow_html=True)
+
+    tab_explore, tab_saved, tab_rewards, tab_profile = st.tabs(["🔍 Explore", "📍 Saved", "🏆 Rewards", "👤 Profile"])
 
     with tab_explore:
         user_profile = get_profile(st.session_state.user.id)
@@ -2361,6 +2392,7 @@ else:
                     }
                     st.session_state.search_active = True
                     st.session_state.trigger_fetch = True
+                    st.session_state.is_loading = True
                     st.session_state.session_seen_spots = []
                     city = "Nearby" if st.session_state.mem_gps_active else (ui_loc.split()[0].rstrip(',') if ui_loc else "Unknown")
                     if get_wild_clicked:
@@ -2374,6 +2406,7 @@ else:
             if st.button("← Start a Fresh Search"):
                 st.session_state.search_active = False
                 st.session_state.current_results = None
+                st.session_state.is_loading = False
                 st.session_state.session_seen_spots = []
                 st.rerun()
                 
@@ -2394,6 +2427,7 @@ else:
                         lat, lng = get_coordinates(st.session_state.mem_loc)
 
                     if lat is None:
+                        st.session_state.is_loading = False
                         status_loader.error("Couldn't find that location.")
                     else:
                         target_date_str, relative_day = get_local_target_date(lat, lng, st.session_state.mem_day)
@@ -2451,6 +2485,8 @@ else:
 
                         if cached_result and not st.session_state.get('skip_cache', False):
                             st.session_state.current_results = cached_result
+                            st.session_state.is_loading = False
+                            st.rerun()
                         else:
                             st.session_state.skip_cache = False
                             ai_results = get_ai_recommendations(
@@ -2511,7 +2547,10 @@ else:
                             status_loader.success("✅ Adventure Ready!")
                         else:
                             status_loader.success("✅ Itinerary Ready!")
+                        st.session_state.is_loading = False
+                        st.rerun()
                 except Exception as e:
+                    st.session_state.is_loading = False
                     if isinstance(e, TimeoutError):
                         status_loader.error("Taking longer than usual, please try again.")
                         st.session_state.fetch_timed_out = True
@@ -2522,6 +2561,7 @@ else:
                 def _retry():
                     st.session_state.fetch_timed_out = False
                     st.session_state.trigger_fetch = True
+                    st.session_state.is_loading = True
                 st.button("🔄 Try Again", on_click=_retry, type="primary", key="retry_timeout_btn")
 
             if st.session_state.current_results:
@@ -2567,12 +2607,13 @@ else:
                     if st.button("🔀 Shuffle", use_container_width=True):
                         st.session_state.trigger_fetch = True
                         st.session_state.skip_cache = True
+                        st.session_state.is_loading = True
                         st.rerun()
 
     # ----------------------------------------
-    # TAB 2 & 3: PROFILE & SAVED SPOTS 
+    # REWARDS TAB
     # ----------------------------------------
-    with tab_profile:
+    with tab_rewards:
         current_prof = get_profile(st.session_state.user.id) or {}
         user_points  = get_user_points(st.session_state.user.id)
         _uid = st.session_state.user.id
@@ -2751,26 +2792,44 @@ else:
                 _invited_count = 0
             st.caption(f"👥 Friends invited: {_invited_count}")
 
-        # ── F) PROFILE SETTINGS ──────────────────────────────────────────
+    # ----------------------------------------
+    # PROFILE TAB (simplified — settings only)
+    # ----------------------------------------
+    with tab_profile:
+        _uid_p = st.session_state.user.id
+        _prof_p = get_profile(_uid_p) or {}
+        _pts_p = get_user_points(_uid_p)
+        try:
+            _badge_count_p = len(supabase.table('badges').select('badge_id').eq('user_id', _uid_p).execute().data or [])
+        except:
+            _badge_count_p = 0
+
+        st.markdown(
+            f'<div style="padding:12px 0 4px 0;text-align:center;font-size:14px;color:#555;">'
+            f'⚡ <b>{_pts_p} pts</b> · 🏆 <b>{_badge_count_p} badges</b> — see the <b>Rewards</b> tab for details'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
         st.write("---")
         st.subheader("Personalize Your Profile")
         st.write("Set your baseline preferences so the app learns how you like to explore.")
 
         with st.form("profile_form"):
-            fname = st.text_input("First Name", value=current_prof.get('first_name', ''))
-            pname = st.text_input("Partner/Spouse Name (Optional)", value=current_prof.get('partner_name', ''))
-            stroller = st.checkbox("Require Stroller Accessibility", value=current_prof.get('needs_stroller_access', False))
-            dog = st.checkbox("Require Dog-Friendly Patios", value=current_prof.get('needs_dog_friendly', False))
-            vibe_pref = st.text_area("What is your ideal aesthetic? (e.g., 'Warm, modern, naturalistic')", value=current_prof.get('vibe_preference', ''))
+            fname = st.text_input("First Name", value=_prof_p.get('first_name', ''))
+            pname = st.text_input("Partner/Spouse Name (Optional)", value=_prof_p.get('partner_name', ''))
+            stroller = st.checkbox("Require Stroller Accessibility", value=_prof_p.get('needs_stroller_access', False))
+            dog = st.checkbox("Require Dog-Friendly Patios", value=_prof_p.get('needs_dog_friendly', False))
+            vibe_pref = st.text_area("What is your ideal aesthetic? (e.g., 'Warm, modern, naturalistic')", value=_prof_p.get('vibe_preference', ''))
             alcohol_choice = st.radio("Alcohol Preference", ["Drinks Alcohol", "Non-Alcoholic Only"],
-                index=1 if current_prof.get('needs_nonalcoholic', False) else 0)
+                index=1 if _prof_p.get('needs_nonalcoholic', False) else 0)
             dietary_options = ["Vegan", "Vegetarian", "Gluten-Free", "Nut Allergy", "Halal", "Kosher"]
-            current_dietary = [r.strip() for r in current_prof.get('dietary_restrictions', '').split(',') if r.strip()]
+            current_dietary = [r.strip() for r in _prof_p.get('dietary_restrictions', '').split(',') if r.strip()]
             dietary = st.multiselect("Dietary Restrictions", dietary_options, default=[d for d in current_dietary if d in dietary_options])
 
             if st.form_submit_button("Save Profile", type="primary"):
                 supabase.table('user_profiles').upsert({
-                    'id': _uid, 'first_name': fname, 'partner_name': pname,
+                    'id': _uid_p, 'first_name': fname, 'partner_name': pname,
                     'needs_stroller_access': stroller, 'needs_dog_friendly': dog, 'vibe_preference': vibe_pref,
                     'needs_nonalcoholic': alcohol_choice == "Non-Alcoholic Only",
                     'dietary_restrictions': ', '.join(dietary)
@@ -2785,6 +2844,7 @@ else:
             st.session_state.session_seen_spots = []
             st.session_state.search_active = False
             st.session_state.trigger_fetch = False
+            st.session_state.is_loading = False
             st.rerun()
 
     with tab_saved:
