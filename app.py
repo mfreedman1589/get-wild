@@ -1277,10 +1277,21 @@ def _dismiss_wild_idea(user_id):
     except:
         pass
 
-def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary, pref_keywords=None, radius_miles=20, excluded_spots=()):
+def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary, pref_keywords=None, radius_miles=20, excluded_spots=(), weather=None, filters=None):
     """Returns a full card-ready dict or None. Uses real Google Places data."""
     try:
-        h = datetime.utcnow().hour
+        # Use local time at the user's lat/lng for accurate time_context
+        try:
+            _ts = int(time.time())
+            _tz_url = f"https://maps.googleapis.com/maps/api/timezone/json?location={lat},{lng}&timestamp={_ts}&key={GOOGLE_API_KEY}"
+            _tz_res = requests.get(_tz_url, timeout=5).json()
+            if _tz_res.get('status') == 'OK':
+                _local_ts = _ts + _tz_res['dstOffset'] + _tz_res['rawOffset']
+                h = datetime.utcfromtimestamp(_local_ts).hour
+            else:
+                h = datetime.utcnow().hour
+        except:
+            h = datetime.utcnow().hour
         if 6 <= h < 12:       time_context = "morning"
         elif 12 <= h < 17:    time_context = "afternoon"
         elif 17 <= h < 21:    time_context = "evening"
@@ -1324,17 +1335,30 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
             f" Do not suggest any of these already-saved venues: {', '.join(excluded_spots[:20])}."
             if excluded_spots else ""
         )
+        weather_clause = (
+            f"Current weather: {weather}. "
+            if weather and weather != "Weather data unavailable." else ""
+        )
+        _filter_parts = []
+        if filters:
+            if filters.get('time')    and filters['time']    not in ('Any', ''): _filter_parts.append(f"{filters['time']} timing")
+            if filters.get('group')   and filters['group']   not in ('Any', ''): _filter_parts.append(f"{filters['group']} group")
+            if filters.get('setting') and filters['setting'] not in ('Any', ''): _filter_parts.append(f"{filters['setting']} setting")
+            if filters.get('food')    and filters['food']    not in ('Any', ''): _filter_parts.append(f"{filters['food']} food preference")
+            if filters.get('budget')  and filters['budget']  not in ('Any', ''): _filter_parts.append(f"{filters['budget']} budget")
+        filters_clause = f"User preferences: {', '.join(_filter_parts)}. " if _filter_parts else ""
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             response_format={"type": "json_object"},
             messages=[{"role": "user", "content": (
                 f"From this list of real local venues near {location_name}, pick the ONE most "
                 f"surprising and delightful option for a {time_context} outing{pref_clause}.{excl_clause} "
+                f"{weather_clause}{filters_clause}"
                 "Prefer unconventional, unique, or hidden gems over mainstream choices. "
                 f"Venues: {json.dumps(candidates)}. "
                 "Return JSON: name (exact venue name from the list), "
                 "category (concise venue type, e.g. 'Escape Room', 'Jazz Club'), "
-                "why_now (one punchy why-this-why-tonight sentence, max 15 words), "
+                "why_now (one punchy sentence referencing the weather or time of day, max 15 words), "
                 "emoji (single emoji), "
                 "matched_tags (array of 2-3 short descriptor strings)."
             )}],
@@ -1965,6 +1989,11 @@ def render_spot_card(spot, location_input, user_id, index, mode):
             tags_html += f'<span class="wc-tag">✓ {tag}</span>'
 
     tier_name  = spot.get('tier_name', 'Top Pick')
+    # Sanitize: GPT sometimes returns "Tier 2" / "TIER 2" instead of the actual name
+    _tn_check = tier_name.lower().strip()
+    if _tn_check in ('tier 1', 'tier1'):    tier_name = 'The Sure Thing'
+    elif _tn_check in ('tier 2', 'tier2'): tier_name = 'The Fresh Take'
+    elif _tn_check in ('tier 3', 'tier3'): tier_name = 'The Hidden Gem'
     category   = spot.get('category', '')
     vibe       = spot.get('vibe_check', '')
     address    = spot.get('address', '')
@@ -2401,12 +2430,25 @@ else:
                         _wi_cache_key = f"{st.session_state.user.id}_{_wi_loc}_{_wi_kws}"
                         if st.session_state.get('wild_idea_cache_key') != _wi_cache_key:
                             _wi_placeholder = st.empty()
-                            _wi_placeholder.info("💡 Finding your wild idea...")
+                            _wi_placeholder.markdown(
+                                '<div style="background:#eaf5ef;border-left:3px solid #2d6a4f;'
+                                'color:#2d6a4f;border-radius:8px;padding:12px;font-weight:600;">'
+                                '💡 Finding your wild idea...</div>',
+                                unsafe_allow_html=True,
+                            )
                             st.session_state.wild_idea_cache = get_wild_idea_uncached(
                                 str(st.session_state.user.id), _wi_lat, _wi_lng, _wi_loc, _prof_summary,
                                 pref_keywords=_wi_kws,
                                 radius_miles=st.session_state.get('mem_dist', 20),
                                 excluded_spots=_wi_excluded,
+                                weather=get_live_weather(_wi_lat, _wi_lng),
+                                filters={
+                                    'time':    st.session_state.get('mem_time', 'Any'),
+                                    'group':   st.session_state.get('mem_group', 'Any'),
+                                    'setting': st.session_state.get('mem_vibe', 'Any'),
+                                    'food':    st.session_state.get('mem_food', 'Any'),
+                                    'budget':  st.session_state.get('mem_spend', 'Any'),
+                                },
                             )
                             st.session_state.wild_idea_cache_key = _wi_cache_key
                             _wi_placeholder.empty()
