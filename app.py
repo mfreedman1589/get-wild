@@ -480,7 +480,6 @@ def get_user_badge_stats(user_id):
 def check_and_award_badges(user_id, silent=False):
     try:
         stats  = get_user_badge_stats(user_id)
-        st.write(f"DEBUG stats: {stats}")
         earned = {b['badge_id'] for b in (supabase.table('badges').select('badge_id').eq('user_id', user_id).execute().data or [])}
         for badge in BADGES:
             if badge['id'] in earned:
@@ -490,21 +489,19 @@ def check_and_award_badges(user_id, silent=False):
             except:
                 unlocked = False
             if unlocked:
-                st.write(f"DEBUG: awarding {badge['id']}")
                 try:
-                    result = supabase.table('badges').insert({
+                    supabase.table('badges').insert({
                         'user_id': user_id, 'badge_id': badge['id'],
                         'badge_name': badge['name'], 'badge_emoji': badge['emoji'],
                     }).execute()
-                    st.write(f"DEBUG insert result: {result}")
                     award_points(user_id, 'badge', badge['pts'], f"Badge: {badge['name']}")
                     if not silent:
                         st.balloons()
                         st.success(f"🏆 Badge Unlocked: {badge['emoji']} {badge['name']}! +{badge['pts']} bonus points")
-                except Exception as _e:
-                    st.write(f"DEBUG insert error: {_e}")
-    except Exception as _e:
-        st.write(f"DEBUG check_and_award_badges error: {_e}")
+                except:
+                    pass
+    except:
+        pass
 
 def submit_feedback(user_id, comment):
     if not comment.strip():
@@ -2620,9 +2617,10 @@ else:
 
         # Backfill badges once per session — catches retroactively earned badges silently
         if not st.session_state.get('badges_backfilled'):
-            st.write(f"DEBUG: running backfill for {_uid}")
             check_and_award_badges(_uid, silent=True)
             st.session_state.badges_backfilled = True
+            _db_check = supabase.table('badges').select('*').eq('user_id', _uid).execute()
+            st.write(f"DEBUG badges in DB: {_db_check.data}")
 
         # ── A) POINTS HERO ──────────────────────────────────────────────
         wild_tally = current_prof.get('wild_tally', 0)
