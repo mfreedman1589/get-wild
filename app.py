@@ -2541,49 +2541,155 @@ else:
     with tab_profile:
         current_prof = get_profile(st.session_state.user.id) or {}
         user_points  = get_user_points(st.session_state.user.id)
+        _uid = st.session_state.user.id
 
-        st.markdown(f"## ⚡ {user_points} Wild Points")
-        st.markdown(f"**🏆 Get Wild Tally: {current_prof.get('wild_tally', 0)}**")
+        # ── A) POINTS HERO ──────────────────────────────────────────────
+        wild_tally = current_prof.get('wild_tally', 0)
+        st.markdown(
+            f'<div style="text-align:center;padding:24px 0 12px 0;">'
+            f'<div style="font-size:32px;font-weight:800;color:#2d6a4f;letter-spacing:-0.5px;">⚡ {user_points} Wild Points</div>'
+            f'<div style="font-size:14px;color:#888;margin-top:6px;">🗺️ {wild_tally} spots explored</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
-        # Badges
-        st.write("---")
-        st.subheader("Your Badges")
-        try:
-            earned_badges = supabase.table('badges').select('*').eq('user_id', st.session_state.user.id).execute().data or []
-        except:
-            earned_badges = []
-
-        if not earned_badges:
-            st.info("No badges yet — get out there! 🌿")
-        else:
-            badge_cols = st.columns(min(len(earned_badges), 4))
-            for i, b in enumerate(earned_badges):
-                with badge_cols[i % 4]:
+        # ── B) RECENT ACTIVITY ──────────────────────────────────────────
+        with st.expander("📋 Recent Activity"):
+            try:
+                _ledger = supabase.table('points_ledger').select('*').eq('user_id', _uid).order('created_at', desc=True).limit(10).execute().data or []
+            except:
+                _ledger = []
+            if not _ledger:
+                st.caption("No activity yet — get out there! 🌿")
+            else:
+                _now = datetime.utcnow()
+                for _row in _ledger:
+                    _pts  = _row.get('points_earned', 0)
+                    _desc = _row.get('description', '')
+                    try:
+                        _ts = _row.get('created_at', '')
+                        _dt = datetime.fromisoformat(_ts.replace('Z', '+00:00')).replace(tzinfo=None)
+                        _days = (_now - _dt).days
+                        if _days == 0:   _ago = "Today"
+                        elif _days == 1: _ago = "Yesterday"
+                        elif _days < 7:  _ago = f"{_days} days ago"
+                        else:            _ago = _dt.strftime(f"%b {_dt.day}")
+                    except:
+                        _ago = ""
                     st.markdown(
-                        f"<div style='text-align:center;font-size:2rem;line-height:1.2'>{b['badge_emoji']}</div>"
-                        f"<div style='text-align:center;font-size:0.75rem;font-weight:600;margin-top:2px'>{b['badge_name']}</div>",
-                        unsafe_allow_html=True
+                        f'<div style="display:flex;align-items:center;padding:6px 0;border-bottom:1px solid #f0f0f0;">'
+                        f'<span style="color:#2d6a4f;font-weight:700;min-width:52px;font-size:0.95rem;">+{_pts}</span>'
+                        f'<span style="flex:1;color:#444;font-size:0.83rem;">{_desc}</span>'
+                        f'<span style="color:#bbb;font-size:0.75rem;white-space:nowrap;margin-left:10px;">{_ago}</span>'
+                        f'</div>',
+                        unsafe_allow_html=True,
                     )
 
-        with st.expander("How to earn points"):
+        # ── C) BADGES ───────────────────────────────────────────────────
+        st.write("---")
+        try:
+            _earned_rows = supabase.table('badges').select('*').eq('user_id', _uid).execute().data or []
+        except:
+            _earned_rows = []
+
+        _BADGE_CATS = {
+            'first_step': 'Explorer', 'committed': 'Explorer', 'keep_going': 'Explorer',
+            'trailblazer': 'Explorer', 'wild_legend': 'Explorer',
+            'first_wild': 'GET WILD', 'wild_at_heart': 'GET WILD',
+            'untamed': 'GET WILD', 'wild_thinker': 'GET WILD',
+            'foodie': 'Taste', 'sommelier': 'Taste', 'hop_head': 'Taste',
+            'coffee_snob': 'Taste', 'splurge_worthy': 'Taste',
+            'romantic': 'Vibe', 'family_first': 'Vibe', 'social_butterfly': 'Vibe',
+            'outdoorsy': 'Vibe', 'gem_hunter': 'Vibe', 'culture_vulture': 'Vibe',
+            'live_wire': 'Vibe', 'freeloader': 'Vibe',
+            'evangelist': 'Social', 'community': 'Social', 'wildfire': 'Social',
+        }
+        _CAT_BG = {
+            'Explorer': '#e8f5e9', 'GET WILD': '#fff3e0',
+            'Taste': '#f3e5f5', 'Vibe': '#e3f2fd', 'Social': '#fffde7',
+        }
+        _badges_by_id = {b['id']: b for b in BADGES}
+        _earned_ids   = {b['badge_id'] for b in _earned_rows}
+
+        st.markdown(f"### 🏆 Badges ({len(_earned_ids)}/{len(BADGES)})")
+
+        def _render_badge_grid(cells_html):
+            for i in range(0, len(cells_html), 3):
+                row = cells_html[i:i+3]
+                while len(row) < 3:
+                    row.append('<div></div>')
+                st.markdown(
+                    '<div style="display:flex;gap:8px;margin-bottom:8px;">'
+                    + ''.join(f'<div style="flex:1;min-width:0;">{c}</div>' for c in row)
+                    + '</div>',
+                    unsafe_allow_html=True,
+                )
+
+        if _earned_rows:
+            _cells = []
+            for _b in _earned_rows:
+                _bid  = _b['badge_id']
+                _meta = _badges_by_id.get(_bid, {})
+                _bg   = _CAT_BG.get(_BADGE_CATS.get(_bid, 'Explorer'), '#f5f5f5')
+                _cells.append(
+                    f'<div style="background:{_bg};border-radius:12px;padding:12px 6px;text-align:center;">'
+                    f'<div style="font-size:28px;line-height:1.2;">{_b.get("badge_emoji","🏅")}</div>'
+                    f'<div style="font-size:11px;font-weight:700;margin-top:4px;">{_b.get("badge_name","")}</div>'
+                    f'<div style="font-size:10px;color:#888;margin-top:2px;">{_meta.get("desc","")}</div>'
+                    f'</div>'
+                )
+            _render_badge_grid(_cells)
+        else:
+            st.info("No badges yet — choose your first outing to get started! 🌿")
+
+        _locked = [b for b in BADGES if b['id'] not in _earned_ids]
+        if _locked:
+            with st.expander(f"🔒 Locked Badges ({len(_locked)} remaining)"):
+                _cells = [
+                    f'<div style="background:#f5f5f5;border-radius:12px;padding:12px 6px;text-align:center;opacity:0.65;">'
+                    f'<div style="font-size:28px;line-height:1.2;filter:grayscale(1);">{b["emoji"]}</div>'
+                    f'<div style="font-size:11px;font-weight:700;margin-top:4px;color:#888;">{b["name"]}</div>'
+                    f'<div style="font-size:10px;color:#aaa;margin-top:2px;">{b["desc"]}</div>'
+                    f'</div>'
+                    for b in _locked
+                ]
+                _render_badge_grid(_cells)
+
+        # ── D) HOW TO EARN ───────────────────────────────────────────────
+        st.write("---")
+        _how_pts, _how_badges = st.tabs(["⚡ Points", "🏆 Badges"])
+
+        with _how_pts:
             st.markdown("""
-- **Save a spot** ⭐ → +1 pt
-- **Choose an outing** (I'm Going) ✅ → +5 pts
-- **Rate a visit 4-5 stars** → +1 pt
-- **Invite a friend** 🌿 → +10 pts when they sign up
-- **Join via invite** → +5 pts signup bonus
-- **Explorer** 🧭 — First saved spot → +5 bonus pts
-- **Trailblazer** 🥾 — 5 saves across different categories → +10 bonus pts
-- **Wild at Heart** 💚 — 10 chosen outings → +25 bonus pts
-- **Foodie** 🍽️ — 5 dining spots rated 4+ stars → +10 bonus pts
-- **Night Owl** 🦉 — 3 bar/lounge/brewery spots saved → +10 bonus pts
-- **Hidden Gem Hunter** 💎 — 5 Hidden Gem tier spots → +20 bonus pts
+| Action | Points |
+|---|---|
+| First save ever | **10 pts** |
+| Save a spot | **1 pt** |
+| Choose outing (Top 3) | **3 pts** |
+| Choose outing (GET WILD) | **5 pts** |
+| Rate a visit (4★) | **2 pts** |
+| Rate a visit (5★) | **5 pts** |
+| Complete a Wild Idea | **3 pts** |
+| Invite a friend | **10 pts** |
+| Friend joins & explores | **15 pts** |
+| Earn a badge | **Varies** |
             """)
 
+        with _how_badges:
+            _CAT_ORDER  = ['Explorer', 'GET WILD', 'Taste', 'Vibe', 'Social']
+            _CAT_EMOJI  = {'Explorer': '🧭', 'GET WILD': '🎲', 'Taste': '🍽️', 'Vibe': '🌈', 'Social': '👥'}
+            for _cat in _CAT_ORDER:
+                st.markdown(f"**{_CAT_EMOJI.get(_cat,'')} {_cat}**")
+                for _b in BADGES:
+                    if _BADGE_CATS.get(_b['id']) == _cat:
+                        _pfx = "✅" if _b['id'] in _earned_ids else "🔒"
+                        st.markdown(f"&nbsp;&nbsp;{_pfx} **{_b['emoji']} {_b['name']}** — {_b['desc']} · *+{_b['pts']} pts*")
+
+        # ── E) INVITE FRIENDS ────────────────────────────────────────────
         st.write("---")
         st.subheader("🌿 Invite Friends")
         st.caption("Earn 10 points for every friend who joins Get Wild")
-        _my_code = generate_referral_code(st.session_state.user.id)
+        _my_code = generate_referral_code(_uid)
         if _my_code:
             try:
                 _base_url = st.query_params.get("_stcore_base_url", "https://get-wild.streamlit.app")
@@ -2592,8 +2698,7 @@ else:
             _invite_link = f"{_base_url}?ref={_my_code}"
             st.text_input("Your invite link", value=_invite_link, disabled=True, label_visibility="collapsed")
             _msg = f"Hey! Check out Get Wild — it finds the best local spots and experiences. Use my link to join and we both get bonus points! {_invite_link}"
-            import urllib.parse
-            _sms_link = f"sms:?body={urllib.parse.quote(_msg)}"
+            _sms_link   = f"sms:?body={urllib.parse.quote(_msg)}"
             _email_link = f"mailto:?subject={urllib.parse.quote('Join me on Get Wild!')}&body={urllib.parse.quote(_msg)}"
             _ic1, _ic2 = st.columns(2)
             with _ic1:
@@ -2606,10 +2711,11 @@ else:
                 _invited_count = 0
             st.caption(f"👥 Friends invited: {_invited_count}")
 
+        # ── F) PROFILE SETTINGS ──────────────────────────────────────────
         st.write("---")
         st.subheader("Personalize Your Profile")
         st.write("Set your baseline preferences so the app learns how you like to explore.")
-        
+
         with st.form("profile_form"):
             fname = st.text_input("First Name", value=current_prof.get('first_name', ''))
             pname = st.text_input("Partner/Spouse Name (Optional)", value=current_prof.get('partner_name', ''))
@@ -2624,13 +2730,13 @@ else:
 
             if st.form_submit_button("Save Profile", type="primary"):
                 supabase.table('user_profiles').upsert({
-                    'id': st.session_state.user.id, 'first_name': fname, 'partner_name': pname,
+                    'id': _uid, 'first_name': fname, 'partner_name': pname,
                     'needs_stroller_access': stroller, 'needs_dog_friendly': dog, 'vibe_preference': vibe_pref,
                     'needs_nonalcoholic': alcohol_choice == "Non-Alcoholic Only",
                     'dietary_restrictions': ', '.join(dietary)
                 }).execute()
                 st.success("Your preferences have been locked in.")
-                
+
         st.write("---")
         if st.button("🚪 Log Out", type="secondary"):
             supabase.auth.sign_out()
