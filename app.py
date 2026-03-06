@@ -42,19 +42,99 @@ NON_TRADITIONAL_OUTDOOR = [
 
 CACHE_VERSION = "v2"
 
-BADGE_DEFINITIONS = [
-    {"id": "explorer",      "name": "Explorer",          "emoji": "🧭", "pts": 5,
-     "desc": "Save your first spot"},
-    {"id": "trailblazer",   "name": "Trailblazer",       "emoji": "🥾", "pts": 10,
-     "desc": "Save spots across 5 different categories"},
-    {"id": "wild_at_heart", "name": "Wild at Heart",     "emoji": "💚", "pts": 25,
-     "desc": "10 chosen outings"},
-    {"id": "foodie",        "name": "Foodie",            "emoji": "🍽️", "pts": 10,
-     "desc": "5 restaurant/dining spots rated 4+ stars"},
-    {"id": "night_owl",     "name": "Night Owl",         "emoji": "🦉", "pts": 10,
-     "desc": "Save 3 bar, lounge, or brewery spots"},
-    {"id": "hidden_gem",    "name": "Hidden Gem Hunter", "emoji": "💎", "pts": 20,
-     "desc": "Save 5 Hidden Gem tier spots"},
+POINTS = {
+    'first_save':       10,
+    'save':              1,
+    'going_top3':        3,
+    'going_wild':        5,
+    'rate':              2,
+    'rate_perfect':      3,   # additional pts for 5-star rating
+    'invite_sent':      10,
+    'friend_activated': 15,
+    'wild_idea':         3,
+}
+
+BADGES = [
+    # Explorer
+    {'id': 'first_step',  'name': 'First Step',         'emoji': '🧭', 'pts': 5,
+     'desc': 'Save your first spot',
+     'check': lambda s: s['total_saves'] >= 1},
+    {'id': 'committed',   'name': 'Committed',           'emoji': '🎯', 'pts': 10,
+     'desc': 'Choose your first outing',
+     'check': lambda s: s['total_chosen'] >= 1},
+    {'id': 'keep_going',  'name': 'Keep It Going',       'emoji': '🔄', 'pts': 15,
+     'desc': 'Choose 5 outings',
+     'check': lambda s: s['total_chosen'] >= 5},
+    {'id': 'trailblazer', 'name': 'Trailblazer',         'emoji': '🥾', 'pts': 25,
+     'desc': 'Choose 10 outings',
+     'check': lambda s: s['total_chosen'] >= 10},
+    {'id': 'wild_legend', 'name': 'Wild Legend',         'emoji': '👑', 'pts': 100,
+     'desc': 'Choose 50 outings',
+     'check': lambda s: s['total_chosen'] >= 50},
+    # GET WILD
+    {'id': 'first_wild',  'name': 'First Wild',          'emoji': '⚡', 'pts': 10,
+     'desc': 'First GET WILD outing',
+     'check': lambda s: s['wild_chosen'] >= 1},
+    {'id': 'wild_at_heart','name': 'Wild at Heart',      'emoji': '🎲', 'pts': 20,
+     'desc': '5 GET WILD outings',
+     'check': lambda s: s['wild_chosen'] >= 5},
+    {'id': 'untamed',     'name': 'Untamed',             'emoji': '🌪️', 'pts': 50,
+     'desc': '25 GET WILD outings',
+     'check': lambda s: s['wild_chosen'] >= 25},
+    {'id': 'wild_thinker','name': 'Wild Thinker',        'emoji': '💡', 'pts': 15,
+     'desc': 'Complete 3 Wild Ideas',
+     'check': lambda s: s['wild_idea_chosen'] >= 3},
+    # Taste
+    {'id': 'foodie',      'name': 'Foodie',              'emoji': '🍽️', 'pts': 10,
+     'desc': 'Rate 5 dining spots 4+ stars',
+     'check': lambda s: s['rated_dining_4plus'] >= 5},
+    {'id': 'sommelier',   'name': 'Sommelier',           'emoji': '🍷', 'pts': 10,
+     'desc': 'Save 5 wine bars or wineries',
+     'check': lambda s: s['wine_saves'] >= 5},
+    {'id': 'hop_head',    'name': 'Hop Head',            'emoji': '🍺', 'pts': 10,
+     'desc': 'Save 5 breweries',
+     'check': lambda s: s['brewery_saves'] >= 5},
+    {'id': 'coffee_snob', 'name': 'Coffee Snob',         'emoji': '☕', 'pts': 5,
+     'desc': 'Save 3 coffee shops',
+     'check': lambda s: s['coffee_saves'] >= 3},
+    {'id': 'splurge_worthy','name': 'Splurge Worthy',   'emoji': '✨', 'pts': 15,
+     'desc': 'Choose 3 Splurge outings',
+     'check': lambda s: s['splurge_chosen'] >= 3},
+    # Vibe
+    {'id': 'romantic',    'name': 'Romantic',            'emoji': '💑', 'pts': 15,
+     'desc': '5 Date outings chosen',
+     'check': lambda s: s['date_chosen'] >= 5},
+    {'id': 'family_first','name': 'Family First',        'emoji': '👨‍👩‍👧', 'pts': 15,
+     'desc': '5 Family outings chosen',
+     'check': lambda s: s['family_chosen'] >= 5},
+    {'id': 'social_butterfly','name': 'Social Butterfly','emoji': '👯', 'pts': 15,
+     'desc': '5 Friends outings chosen',
+     'check': lambda s: s['friends_chosen'] >= 5},
+    {'id': 'outdoorsy',   'name': 'Outdoorsy',           'emoji': '🌲', 'pts': 15,
+     'desc': '5 outdoor outings chosen',
+     'check': lambda s: s['outdoor_chosen'] >= 5},
+    {'id': 'gem_hunter',  'name': 'Gem Hunter',          'emoji': '💎', 'pts': 20,
+     'desc': 'Save 5 Hidden Gem tier spots',
+     'check': lambda s: s['hidden_gem_saves'] >= 5},
+    {'id': 'culture_vulture','name': 'Culture Vulture',  'emoji': '🎭', 'pts': 10,
+     'desc': 'Save 3 museums, galleries, or theaters',
+     'check': lambda s: s['culture_saves'] >= 3},
+    {'id': 'live_wire',   'name': 'Live Wire',           'emoji': '🎵', 'pts': 15,
+     'desc': 'Attend 3 live events',
+     'check': lambda s: s['event_chosen'] >= 3},
+    {'id': 'freeloader',  'name': 'Freeloader',          'emoji': '🆓', 'pts': 10,
+     'desc': 'Complete 5 Free budget outings',
+     'check': lambda s: s['free_chosen'] >= 5},
+    # Social
+    {'id': 'evangelist',  'name': 'Evangelist',          'emoji': '📣', 'pts': 5,
+     'desc': 'Invite your first friend',
+     'check': lambda s: s['referral_count'] >= 1},
+    {'id': 'community',   'name': 'Community',           'emoji': '🌱', 'pts': 20,
+     'desc': '3 friends sign up via your link',
+     'check': lambda s: s['referral_count'] >= 3},
+    {'id': 'wildfire',    'name': 'Wildfire',            'emoji': '🔥', 'pts': 75,
+     'desc': '10 friends sign up via your link',
+     'check': lambda s: s['referral_count'] >= 10},
 ]
 
 GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
@@ -275,19 +355,32 @@ def get_user_preference_scores(user_id):
     except:
         return {}
 
-def save_spot_to_db(user_id, name, address, category, rating=None, notes=""):
+def save_spot_to_db(user_id, name, address, category, rating=None, notes="",
+                    mode="", group_type="", setting="", spend="", tier_name=""):
+    """Save a spot. Returns pre-save row count (0 = first save ever). Returns -1 on error."""
     try:
-        current_time = datetime.utcnow().isoformat()
+        pre_count = 0
+        try:
+            res = supabase.table('saved_spots').select('id', count='exact').eq('user_id', user_id).execute()
+            pre_count = res.count or 0
+        except:
+            pass
+
         supabase.table('saved_spots').insert({
-            'user_id': user_id, 
-            'spot_name': name, 
-            'address': address, 
-            'category': category, 
-            'rating': rating, 
+            'user_id':    user_id,
+            'spot_name':  name,
+            'address':    address,
+            'category':   category,
+            'rating':     rating,
             'user_notes': notes,
-            'saved_at': current_time
+            'saved_at':   datetime.utcnow().isoformat(),
+            'mode':       mode or '',
+            'group_type': group_type or '',
+            'setting':    setting or '',
+            'spend':      spend or '',
+            'tier_name':  tier_name or '',
         }).execute()
-        
+
         if rating != 1:
             prof = get_profile(user_id)
             new_tally = (prof.get('wild_tally') or 0) + 1
@@ -295,7 +388,10 @@ def save_spot_to_db(user_id, name, address, category, rating=None, notes=""):
             st.toast(f"✅ Saved! Your Get Wild Tally is now {new_tally} 🏆")
         else:
             st.toast("🚫 Blacklisted. We won't recommend this again.")
-    except Exception as e: st.error("Database error.")
+        return pre_count
+    except Exception as e:
+        st.error("Database error.")
+        return -1
 
 def generate_cache_key(filters_dict, location_name, target_date_str, mode):
     raw = json.dumps(filters_dict, sort_keys=True) + location_name + target_date_str + mode + CACHE_VERSION
@@ -330,34 +426,69 @@ def award_points(user_id, action_type, points, description):
     except:
         return None
 
-def check_and_award_badges(user_id):
+def get_user_badge_stats(user_id):
+    """Query saved_spots and compute all badge-check stats. Returns dict with 0s on failure."""
+    _zero = {k: 0 for k in [
+        'total_saves', 'total_chosen', 'wild_chosen', 'wild_idea_chosen',
+        'rated_dining_4plus', 'wine_saves', 'brewery_saves', 'coffee_saves',
+        'splurge_chosen', 'date_chosen', 'family_chosen', 'friends_chosen',
+        'outdoor_chosen', 'hidden_gem_saves', 'culture_saves', 'event_chosen',
+        'free_chosen', 'referral_count',
+    ]}
     try:
         spots = supabase.table('saved_spots').select('*').eq('user_id', user_id).execute().data or []
-        earned = {b['badge_id'] for b in (supabase.table('badges').select('badge_id').eq('user_id', user_id).execute().data or [])}
+        _t3_lower = {n.lower() for n in TIER_3_NAMES}
 
-        for badge in BADGE_DEFINITIONS:
+        def _cat(s):  return (s.get('category') or '').lower()
+        def _chosen(s): return 'chosen' in (s.get('user_notes') or '').lower()
+
+        stats = {
+            'total_saves':       len(spots),
+            'total_chosen':      sum(1 for s in spots if _chosen(s)),
+            'wild_chosen':       sum(1 for s in spots if (s.get('mode') or '') == 'get_wild' and _chosen(s)),
+            'wild_idea_chosen':  sum(1 for s in spots if (s.get('mode') or '') == 'wild_idea' and _chosen(s)),
+            'rated_dining_4plus':sum(1 for s in spots if (s.get('rating') or 0) >= 4 and
+                                   any(k in _cat(s) for k in ['restaurant','dining','bistro','kitchen','eatery','diner','cafe','brunch','food'])),
+            'wine_saves':        sum(1 for s in spots if any(k in _cat(s) for k in ['wine','winery','vineyard'])),
+            'brewery_saves':     sum(1 for s in spots if any(k in _cat(s) for k in ['brewery','brewing','taproom','brewpub'])),
+            'coffee_saves':      sum(1 for s in spots if any(k in _cat(s) for k in ['coffee','cafe','espresso','tea'])),
+            'splurge_chosen':    sum(1 for s in spots if (s.get('spend') or '') == '✨ Splurge' and _chosen(s)),
+            'date_chosen':       sum(1 for s in spots if (s.get('group_type') or '') == 'Date' and _chosen(s)),
+            'family_chosen':     sum(1 for s in spots if (s.get('group_type') or '') == 'Family Outing' and _chosen(s)),
+            'friends_chosen':    sum(1 for s in spots if (s.get('group_type') or '') == 'Friends' and _chosen(s)),
+            'outdoor_chosen':    sum(1 for s in spots if (s.get('setting') or '') == 'Outside' and _chosen(s)),
+            'hidden_gem_saves':  sum(1 for s in spots if (s.get('tier_name') or '').lower() in _t3_lower),
+            'culture_saves':     sum(1 for s in spots if any(k in _cat(s) for k in ['museum','gallery','art','theater','theatre','exhibit'])),
+            'event_chosen':      sum(1 for s in spots if any(k in _cat(s) for k in ['event','concert','performing','music venue']) and _chosen(s)),
+            'free_chosen':       sum(1 for s in spots if (s.get('spend') or '') == '🆓 Free' and _chosen(s)),
+        }
+
+        # Referral count via RPC
+        try:
+            _code = (supabase.table('user_profiles').select('referral_code').eq('id', user_id).execute().data or [{}])[0].get('referral_code', '')
+            stats['referral_count'] = supabase.rpc('get_referral_count', {'p_referral_code': _code}).execute().data or 0
+        except:
+            stats['referral_count'] = 0
+
+        return stats
+    except:
+        return _zero
+
+def check_and_award_badges(user_id):
+    try:
+        stats  = get_user_badge_stats(user_id)
+        earned = {b['badge_id'] for b in (supabase.table('badges').select('badge_id').eq('user_id', user_id).execute().data or [])}
+        for badge in BADGES:
             if badge['id'] in earned:
                 continue
-            bid = badge['id']
-            unlocked = False
-
-            if bid == 'explorer':
-                unlocked = len(spots) >= 1
-            elif bid == 'trailblazer':
-                unlocked = len({s.get('category', '') for s in spots if s.get('category')}) >= 5
-            elif bid == 'wild_at_heart':
-                unlocked = len([s for s in spots if 'chosen' in (s.get('user_notes') or '') or (s.get('rating') or 0) > 0]) >= 10
-            elif bid == 'foodie':
-                unlocked = len([s for s in spots if any(k in (s.get('category') or '').lower() for k in ['restaurant', 'dining', 'food', 'bistro', 'kitchen']) and (s.get('rating') or 0) >= 4]) >= 5
-            elif bid == 'night_owl':
-                unlocked = len([s for s in spots if any(k in (s.get('category') or '').lower() for k in ['bar', 'lounge', 'brewery'])]) >= 3
-            elif bid == 'hidden_gem':
-                unlocked = len([s for s in spots if 'hidden gem' in (s.get('user_notes') or '').lower() or 'hidden gem' in (s.get('category') or '').lower()]) >= 5
-
+            try:
+                unlocked = badge['check'](stats)
+            except:
+                unlocked = False
             if unlocked:
                 try:
                     supabase.table('badges').insert({
-                        'user_id': user_id, 'badge_id': bid,
+                        'user_id': user_id, 'badge_id': badge['id'],
                         'badge_name': badge['name'], 'badge_emoji': badge['emoji'],
                     }).execute()
                     award_points(user_id, 'badge', badge['pts'], f"Badge: {badge['name']}")
@@ -1186,16 +1317,25 @@ def render_wild_idea_card(idea, location_input, user_id):
         st.markdown(html_card, unsafe_allow_html=True)
         col1, col2, col3 = st.columns(3)
         _key = name.replace(' ', '_')[:20]
+        _wi_ctx = dict(
+            mode='wild_idea',
+            group_type=st.session_state.get('mem_group', ''),
+            setting=st.session_state.get('mem_vibe', ''),
+            spend=st.session_state.get('mem_spend', ''),
+            tier_name='Wild Idea',
+        )
         with col1:
             if st.button("⭐ Save for Later", key=f"wi_save_{_key}", use_container_width=True):
-                save_spot_to_db(user_id, name, address, category)
-                award_points(user_id, "save", 1, "Saved a Wild Idea spot")
+                _pre = save_spot_to_db(user_id, name, address, category, **_wi_ctx)
+                _pts = POINTS['first_save'] if _pre == 0 else POINTS['save']
+                award_points(user_id, "save", _pts, "First spot saved! 🎉" if _pre == 0 else "Saved a Wild Idea spot")
+                check_and_award_badges(user_id)
                 st.session_state.wild_idea_expanded = False
                 st.rerun()
         with col2:
             if st.button("✅ I'm Going", key=f"wi_going_{_key}", use_container_width=True, type="primary"):
-                save_spot_to_db(user_id, name, address, category, notes="chosen")
-                award_points(user_id, "going", 3, "🎲 Wild Idea accepted! +3 points")
+                save_spot_to_db(user_id, name, address, category, notes="chosen", **_wi_ctx)
+                award_points(user_id, "going", POINTS['wild_idea'], f"🎲 Wild Idea accepted! +{POINTS['wild_idea']} points")
                 check_and_award_badges(user_id)
                 st.session_state.wild_idea_expanded = False
                 st.balloons()
@@ -1774,19 +1914,29 @@ def render_spot_card(spot, location_input, user_id, index, mode):
     with st.container(border=True):
         st.markdown(html_card, unsafe_allow_html=True)
         col1, col2, col3 = st.columns(3)
+        _ctx = dict(
+            mode=mode,
+            group_type=st.session_state.get('mem_group', ''),
+            setting=st.session_state.get('mem_vibe', ''),
+            spend=st.session_state.get('mem_spend', ''),
+            tier_name=spot.get('tier_name', ''),
+        )
         with col1:
             if st.button("⭐ Save", key=f"save_{index}_{spot['name']}", use_container_width=True, help="Save for later"):
-                save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'))
-                award_points(user_id, "save", 1, "Saved a spot")
+                _pre = save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'), **_ctx)
+                _pts = POINTS['first_save'] if _pre == 0 else POINTS['save']
+                award_points(user_id, "save", _pts, "First spot saved! 🎉" if _pre == 0 else "Saved a spot")
                 check_and_award_badges(user_id)
         with col2:
             if st.button("✅ I'm Going", key=f"going_{index}_{spot['name']}", use_container_width=True, type="primary", help="Mark as chosen"):
-                save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'), notes="chosen")
-                award_points(user_id, "going", 5, "Chose an outing")
+                save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'), notes="chosen", **_ctx)
+                _gpts = POINTS['going_wild'] if mode == 'get_wild' else POINTS['going_top3']
+                award_points(user_id, "going", _gpts, "Chose an outing")
                 check_and_award_badges(user_id)
         with col3:
             if st.button("👎 Not for me", key=f"nope_{index}_{spot['name']}", use_container_width=True, help="Never suggest this again"):
-                save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'), rating=1, notes="Blacklisted via quick-button.")
+                save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'),
+                                rating=1, notes="Blacklisted via quick-button.", **_ctx)
 
 def fetch_alltrails_trails(lat, lng, radius_miles, difficulty=None):
     """Fetch trails from AllTrails API. Returns [] if key not configured."""
@@ -2536,8 +2686,12 @@ else:
 
                         if st.form_submit_button("Update Feedback", type="primary"):
                             supabase.table('saved_spots').update({'rating': new_rating, 'user_notes': notes}).eq('id', saved['id']).execute()
+                            if new_rating == 5:
+                                award_points(st.session_state.user.id, "rating", POINTS['rate'] + POINTS['rate_perfect'], "5-star rating!")
+                            elif new_rating >= 4:
+                                award_points(st.session_state.user.id, "rating", POINTS['rate'], "Rated a visit")
                             if new_rating >= 4:
-                                award_points(st.session_state.user.id, "rating", 1, "Rated a visit")
+                                check_and_award_badges(st.session_state.user.id)
                             st.success("Feedback saved!")
                             st.session_state.saved_spots_dirty = True
                             st.rerun()
