@@ -230,6 +230,8 @@ custom_css = """
 
     /* ACTION BUTTONS */
     .stButton > button { font-weight: 700 !important; min-height: 48px !important; border-radius: 12px !important; }
+    button[data-testid="stBaseButton-primary"] { color: white !important; }
+    button[data-testid="stBaseButton-primary"] * { color: white !important; }
 
     /* POINTS HERO (Rewards tab) */
     .gw-points-hero { background: linear-gradient(135deg, #2d6a4f, #52b788); border-radius: 16px; padding: 24px; text-align: center; color: white; margin-bottom: 16px; }
@@ -2107,9 +2109,8 @@ with _hero_col:
 </div>
 """, unsafe_allow_html=True)
 with _fb_col:
-    st.write("")  # vertical nudge to align with header
     _fb_user_id = st.session_state.user.id if st.session_state.get('user') else None
-    with st.popover("💬", help="Send feedback"):
+    with st.popover("💬 Feedback"):
         st.markdown("**What's on your mind?**")
         st.caption("Bug, idea, or general feedback — we read everything.")
         st.text_area("", placeholder="Type here...", label_visibility="collapsed", key="fb_textarea")
@@ -2356,7 +2357,6 @@ else:
                 st.success("🌿 GPS Locked!")
 
             st.write("---")
-            st.subheader("What's the plan?")
 
             # Option mappings: display ↔ internal value
             _GROUP_OPTS  = ["💑 Date", "👨‍👩‍👧 Family", "👯 Friends", "🙋 Solo"]
@@ -2639,7 +2639,11 @@ else:
                             get_radius=250,
                             pickable=True,
                         )
-                        view_state = pdk.ViewState(latitude=map_data[0]['lat'], longitude=map_data[0]['lon'], zoom=12)
+                        _avg_lat = sum(d['lat'] for d in map_data) / len(map_data)
+                        _avg_lon = sum(d['lon'] for d in map_data) / len(map_data)
+                        _spread = max((abs(d['lat'] - _avg_lat) + abs(d['lon'] - _avg_lon) for d in map_data), default=0)
+                        _zoom = 13 if _spread < 0.03 else 12 if _spread < 0.07 else 11 if _spread < 0.14 else 10
+                        view_state = pdk.ViewState(latitude=_avg_lat, longitude=_avg_lon, zoom=_zoom, pitch=0)
                         st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip={"html": "<b>{name}</b>"}))
                         num_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
                         map_btn_cols = st.columns(len(map_data))
