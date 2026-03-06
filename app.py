@@ -249,6 +249,7 @@ if 'show_onboarding' not in st.session_state: st.session_state.show_onboarding =
 if 'wild_idea_dismissed' not in st.session_state: st.session_state.wild_idea_dismissed = False
 if 'wild_idea_expanded' not in st.session_state: st.session_state.wild_idea_expanded = False
 if 'show_welcome_bonus' not in st.session_state: st.session_state.show_welcome_bonus = False
+if 'badges_backfilled' not in st.session_state: st.session_state.badges_backfilled = False
 if 'referral_code' not in st.session_state:
     st.session_state.referral_code = st.query_params.get("ref", "")
 
@@ -475,10 +476,9 @@ def get_user_badge_stats(user_id):
     except:
         return _zero
 
-def check_and_award_badges(user_id):
+def check_and_award_badges(user_id, silent=False):
     try:
         stats  = get_user_badge_stats(user_id)
-        st.write(f"DEBUG badge stats: {stats}")
         earned = {b['badge_id'] for b in (supabase.table('badges').select('badge_id').eq('user_id', user_id).execute().data or [])}
         for badge in BADGES:
             if badge['id'] in earned:
@@ -494,8 +494,9 @@ def check_and_award_badges(user_id):
                         'badge_name': badge['name'], 'badge_emoji': badge['emoji'],
                     }).execute()
                     award_points(user_id, 'badge', badge['pts'], f"Badge: {badge['name']}")
-                    st.balloons()
-                    st.success(f"🏆 Badge Unlocked: {badge['emoji']} {badge['name']}! +{badge['pts']} bonus points")
+                    if not silent:
+                        st.balloons()
+                        st.success(f"🏆 Badge Unlocked: {badge['emoji']} {badge['name']}! +{badge['pts']} bonus points")
                 except:
                     pass
     except:
@@ -2554,6 +2555,11 @@ else:
         current_prof = get_profile(st.session_state.user.id) or {}
         user_points  = get_user_points(st.session_state.user.id)
         _uid = st.session_state.user.id
+
+        # Backfill badges once per session — catches retroactively earned badges silently
+        if not st.session_state.get('badges_backfilled'):
+            check_and_award_badges(_uid, silent=True)
+            st.session_state.badges_backfilled = True
 
         # ── A) POINTS HERO ──────────────────────────────────────────────
         wild_tally = current_prof.get('wild_tally', 0)
