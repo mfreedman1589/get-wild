@@ -479,6 +479,7 @@ def get_user_badge_stats(user_id):
 def check_and_award_badges(user_id, silent=False):
     try:
         stats  = get_user_badge_stats(user_id)
+        st.write(f"DEBUG stats: {stats}")
         earned = {b['badge_id'] for b in (supabase.table('badges').select('badge_id').eq('user_id', user_id).execute().data or [])}
         for badge in BADGES:
             if badge['id'] in earned:
@@ -488,19 +489,21 @@ def check_and_award_badges(user_id, silent=False):
             except:
                 unlocked = False
             if unlocked:
+                st.write(f"DEBUG: awarding {badge['id']}")
                 try:
-                    supabase.table('badges').insert({
+                    result = supabase.table('badges').insert({
                         'user_id': user_id, 'badge_id': badge['id'],
                         'badge_name': badge['name'], 'badge_emoji': badge['emoji'],
                     }).execute()
+                    st.write(f"DEBUG insert result: {result}")
                     award_points(user_id, 'badge', badge['pts'], f"Badge: {badge['name']}")
                     if not silent:
                         st.balloons()
                         st.success(f"🏆 Badge Unlocked: {badge['emoji']} {badge['name']}! +{badge['pts']} bonus points")
-                except:
-                    pass
-    except:
-        pass
+                except Exception as _e:
+                    st.write(f"DEBUG insert error: {_e}")
+    except Exception as _e:
+        st.write(f"DEBUG check_and_award_badges error: {_e}")
 
 def submit_feedback(user_id, comment):
     if not comment.strip():
@@ -1172,7 +1175,7 @@ def _dismiss_wild_idea(user_id):
         pass
 
 @st.cache_data(ttl=14400)
-def get_wild_idea(user_id_str, lat, lng, location_name, profile_summary, pref_keywords=None, radius_miles=20):
+def get_wild_idea(user_id_str, lat, lng, location_name, profile_summary, pref_keywords=None, radius_miles=20, excluded_spots=()):
     """Returns a full card-ready dict or None. Uses real Google Places data. Cached 4h."""
     try:
         h = datetime.utcnow().hour
@@ -1187,6 +1190,16 @@ def get_wild_idea(user_id_str, lat, lng, location_name, profile_summary, pref_ke
 
         # Fetch real Places results
         raw_places = fetch_places_semantic(places_query, lat, lng, radius_miles)
+        if not raw_places:
+            return None
+
+        # Filter out already-saved spots (case-insensitive)
+        _excl_lower = {n.lower() for n in (excluded_spots or ())}
+        if _excl_lower:
+            raw_places = [
+                p for p in raw_places
+                if (p.get('displayName', {}).get('text') or '').lower() not in _excl_lower
+            ]
         if not raw_places:
             return None
 
@@ -1205,12 +1218,16 @@ def get_wild_idea(user_id_str, lat, lng, location_name, profile_summary, pref_ke
             f" for someone who enjoys {profile_summary}"
             if profile_summary and profile_summary != "no specific preferences" else ""
         )
+        excl_clause = (
+            f" Do not suggest any of these already-saved venues: {', '.join(excluded_spots[:20])}."
+            if excluded_spots else ""
+        )
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             response_format={"type": "json_object"},
             messages=[{"role": "user", "content": (
                 f"From this list of real local venues near {location_name}, pick the ONE most "
-                f"surprising and delightful option for a {time_context} outing{pref_clause}. "
+                f"surprising and delightful option for a {time_context} outing{pref_clause}.{excl_clause} "
                 "Prefer unconventional, unique, or hidden gems over mainstream choices. "
                 f"Venues: {json.dumps(candidates)}. "
                 "Return JSON: name (exact venue name from the list), "
@@ -2214,13 +2231,17 @@ else:
 
                         _wi_pref_scores = get_user_preference_scores(st.session_state.user.id)
                         _wi_kws = tuple((_wi_pref_scores.get('top_keywords') or [])[:2]) if _wi_pref_scores else None
+                        _wi_excluded = tuple(get_excluded_spots(st.session_state.user.id))
 
-                        with st.spinner("💡 Finding your wild idea..."):
-                            _idea = get_wild_idea(
-                                str(st.session_state.user.id), _wi_lat, _wi_lng, _wi_loc, _prof_summary,
-                                pref_keywords=_wi_kws,
-                                radius_miles=st.session_state.get('mem_dist', 20),
-                            )
+                        _wi_placeholder = st.empty()
+                        _wi_placeholder.info("💡 Finding your wild idea...")
+                        _idea = get_wild_idea(
+                            str(st.session_state.user.id), _wi_lat, _wi_lng, _wi_loc, _prof_summary,
+                            pref_keywords=_wi_kws,
+                            radius_miles=st.session_state.get('mem_dist', 20),
+                            excluded_spots=_wi_excluded,
+                        )
+                        _wi_placeholder.empty()
                         if _idea:
                             st.markdown(
                                 '<div style="font-size:0.72rem;font-weight:700;letter-spacing:1.2px;'
@@ -2558,6 +2579,7 @@ else:
 
         # Backfill badges once per session — catches retroactively earned badges silently
         if not st.session_state.get('badges_backfilled'):
+            st.write(f"DEBUG: running backfill for {_uid}")
             check_and_award_badges(_uid, silent=True)
             st.session_state.badges_backfilled = True
 
