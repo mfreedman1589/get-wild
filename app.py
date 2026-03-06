@@ -171,6 +171,8 @@ custom_css = """
 
     /* BASE FONT */
     * { font-family: 'Plus Jakarta Sans', sans-serif !important; }
+    /* Streamlit bundles Material Symbols — exempt it from the * override */
+    .material-symbols-rounded { font-family: 'Material Symbols Rounded' !important; }
 
     /* APP BACKGROUND */
     .stApp { background-color: #f4faf6 !important; }
@@ -235,11 +237,11 @@ custom_css = """
 
     /* ACTION BUTTONS */
     .stButton > button { font-weight: 700 !important; min-height: 48px !important; border-radius: 12px !important; }
-    button[data-testid="stBaseButton-primary"],
-    button[data-testid="stBaseButton-primary"] *,
-    button[data-testid="stBaseButton-primary"] p,
-    button[data-testid="stBaseButton-primary"] div,
-    button[data-testid="stBaseButton-primary"] span { color: white !important; }
+    button[data-testid*="primary"],
+    button[data-testid*="primary"] *,
+    button[data-testid*="primary"] p,
+    button[data-testid*="primary"] div,
+    button[data-testid*="primary"] span { color: white !important; }
 
     /* POINTS HERO (Rewards tab) */
     .gw-points-hero { background: linear-gradient(135deg, #2d6a4f, #52b788); border-radius: 16px; padding: 24px; text-align: center; color: white; margin-bottom: 16px; }
