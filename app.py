@@ -257,10 +257,7 @@ custom_css = """
 
     /* SEGMENTED CONTROLS (pill filters) */
     [data-testid="stSegmentedControl"] { background: #eaf5ef !important; border-radius: 10px !important; }
-    [data-testid="stSegmentedControl"] label,
-    [data-testid="stSegmentedControl"] button { font-size: 13px !important; font-weight: 600 !important; }
-    [data-testid="stSegmentedControl"] button[aria-pressed="true"] { background: #ffffff !important; color: #2d6a4f !important; box-shadow: 0 1px 3px rgba(0,0,0,0.1) !important; }
-    [data-testid="stSegmentedControl"] button:not([aria-pressed="true"]) { background: transparent !important; color: #4a5568 !important; }
+    [data-testid="stSegmentedControl"] label { font-weight: 600 !important; font-size: 13px !important; }
 
     /* ACTION BUTTONS */
     .stButton > button { font-weight: 700 !important; min-height: 48px !important; border-radius: 12px !important; white-space: nowrap !important; }
@@ -269,18 +266,6 @@ custom_css = """
     button[data-testid*="primary"] p,
     button[data-testid*="primary"] div,
     button[data-testid*="primary"] span { color: white !important; }
-
-    /* Keyword toggle — match filter pill styling exactly */
-    [data-testid="kw_toggle"] button {
-        background: #eaf5ef !important;
-        border: 1px solid #e0e0e0 !important;
-        border-radius: 10px !important;
-        font-size: 13px !important;
-        font-weight: 600 !important;
-        color: #4a5568 !important;
-        min-height: 38px !important;
-        width: 100% !important;
-    }
 
     /* POINTS HERO (Rewards tab) */
     .gw-points-hero { background: linear-gradient(135deg, #2d6a4f, #52b788); border-radius: 16px; padding: 24px; text-align: center; color: white; margin-bottom: 16px; }
@@ -383,6 +368,18 @@ custom_css = """
         [data-testid="stVerticalBlock"] > div {
             color: #1a1a1a !important;
         }
+    }
+
+    /* Keyword toggle — last rule, overrides everything */
+    [data-testid="kw_toggle"] button {
+        background: #eaf5ef !important;
+        border: 1px solid #e0e0e0 !important;
+        border-radius: 10px !important;
+        font-size: 13px !important;
+        font-weight: 600 !important;
+        color: #6b7280 !important;
+        min-height: 38px !important;
+        width: 100% !important;
     }
 </style>
 """
