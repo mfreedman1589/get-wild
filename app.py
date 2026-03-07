@@ -308,6 +308,17 @@ custom_css = """
     .wc-wild-idea .wc-util-link { color: #a8e6c8 !important; }
     .wc-wild-idea .wc-util-sep { color: rgba(82,183,136,0.5) !important; }
     .wc-wild-idea .wc-vibe-pill { background: rgba(82,183,136,0.2) !important; color: #e0f0e8 !important; }
+    .wc-wild-idea a { color: #a8d5b5 !important; }
+    div:has(#gwia-wild)+[data-testid="stVerticalBlockBorderWrapper"] {
+        background: #0a1f14 !important;
+        border: 3px solid #52b788 !important;
+        animation: wildEntrance 0.5s ease-out, wildGlow 2.5s ease-in-out 0.5s infinite;
+    }
+    div:has(#gwia-wild)+[data-testid="stVerticalBlockBorderWrapper"] .stButton > button {
+        background: transparent !important;
+        color: #ffffff !important;
+        border: 1.5px solid rgba(82,183,136,0.6) !important;
+    }
 
     /* GPS COMPONENT — hide white box, show only the icon button */
     [data-testid="stCustomComponentV1"] {
@@ -1523,22 +1534,7 @@ def render_wild_idea_card(idea, location_input, user_id):
   </div>
 </div>"""
 
-    st.markdown(
-        '<style>'
-        'div:has(#gwia-wild)+[data-testid="stVerticalBlockBorderWrapper"]{'
-        'background:#0a1f14!important;'
-        'border:3px solid #52b788!important;'
-        'animation:wildEntrance 0.5s ease-out,wildGlow 2.5s ease-in-out 0.5s infinite!important;'
-        '}'
-        'div:has(#gwia-wild)+[data-testid="stVerticalBlockBorderWrapper"] .stButton>button{'
-        'background:transparent!important;'
-        'color:#ffffff!important;'
-        'border:1.5px solid rgba(82,183,136,0.6)!important;'
-        '}'
-        '</style>'
-        '<div id="gwia-wild"></div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown('<div id="gwia-wild"></div>', unsafe_allow_html=True)
 
     with st.container(border=True):
         st.markdown(html_card, unsafe_allow_html=True)
