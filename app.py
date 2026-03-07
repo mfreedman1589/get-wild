@@ -176,29 +176,6 @@ custom_css = """
     .material-symbols-outlined,
     .material-symbols-sharp { font-family: 'Material Symbols Rounded' !important; }
 
-    /* Keyword filter pill — subtle secondary toggle */
-    .gw-kw-wrap .stButton > button {
-        color: #4a7c5f !important;
-        border: 1px solid #c8e6c9 !important;
-        background: transparent !important;
-        border-radius: 20px !important;
-        font-size: 11px !important;
-        font-weight: 600 !important;
-        min-height: 32px !important;
-        padding: 6px 14px !important;
-        width: fit-content !important;
-    }
-
-    /* Top 3 button — branded green pair with GET WILD */
-    .gw-top3-wrap .stButton > button {
-        background: #eaf5ef !important;
-        color: #2d6a4f !important;
-        border: 1.5px solid #2d6a4f !important;
-        min-height: 48px !important;
-        width: 100% !important;
-        border-radius: 12px !important;
-    }
-
     /* Action button row — enforce equal height on both columns */
     [data-testid="stHorizontalBlock"] [data-testid="stColumn"] .stButton > button {
         min-height: 48px !important;
@@ -2618,11 +2595,26 @@ else:
             ui_dist = st.slider("📍 Max Distance (Miles)", 1, 20, st.session_state.mem_dist)
 
             # Row 7: Specific keyword (optional)
-            st.markdown('<div style="margin-top:16px;"></div>', unsafe_allow_html=True)
-            st.markdown('<div class="gw-kw-wrap">', unsafe_allow_html=True)
+            st.markdown(
+                '<style>'
+                'div:has(#kw-btn-anchor)+[data-testid="stButton"] button{'
+                'color:#4a7c5f!important;'
+                'border:1px solid #c8e6c9!important;'
+                'background:transparent!important;'
+                'border-radius:20px!important;'
+                'font-size:11px!important;'
+                'font-weight:600!important;'
+                'min-height:32px!important;'
+                'padding:6px 14px!important;'
+                'width:fit-content!important;'
+                '}'
+                '</style>'
+                '<div style="margin-top:16px;"></div>'
+                '<div id="kw-btn-anchor"></div>',
+                unsafe_allow_html=True,
+            )
             if st.button("🔍 Looking for Something Specific?", type="secondary", use_container_width=False, key="kw_toggle"):
                 st.session_state.show_keyword = not st.session_state.show_keyword
-            st.markdown('</div>', unsafe_allow_html=True)
             if st.session_state.show_keyword:
                 ui_spec = st.text_input("Keyword", value=st.session_state.mem_spec, placeholder="e.g., 'romantic', 'live jazz', 'axe throwing'", label_visibility="collapsed")
             else:
@@ -2631,9 +2623,21 @@ else:
             st.markdown('<div style="margin-top:16px;border-top:1px solid #e8f5e8;margin-bottom:4px;"></div>', unsafe_allow_html=True)
             btn_col1, btn_col2 = st.columns(2)
             with btn_col1:
-                st.markdown('<div class="gw-top3-wrap">', unsafe_allow_html=True)
+                st.markdown(
+                    '<style>'
+                    'div:has(#top3-btn-anchor)+[data-testid="stButton"] button{'
+                    'background:#eaf5ef!important;'
+                    'color:#2d6a4f!important;'
+                    'border:1.5px solid #2d6a4f!important;'
+                    'min-height:48px!important;'
+                    'width:100%!important;'
+                    'border-radius:12px!important;'
+                    '}'
+                    '</style>'
+                    '<div id="top3-btn-anchor"></div>',
+                    unsafe_allow_html=True,
+                )
                 top_3_clicked = st.button("🌟 Top 3 Recommendations", use_container_width=True)
-                st.markdown('</div>', unsafe_allow_html=True)
             with btn_col2:
                 get_wild_clicked = st.button("🎲 GET WILD", type="primary", use_container_width=True)
 
