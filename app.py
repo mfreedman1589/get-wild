@@ -2124,22 +2124,16 @@ def render_spot_card(spot, location_input, user_id, index, mode):
         f'</div>'
     )
 
-    # GET WILD: inject anchor + green glow CSS targeting the native border wrapper
+    # GET WILD: inject anchor so global #gwia-wild CSS applies dark card treatment
     if mode == "get_wild":
         st.markdown(
-            '<style>'
-            'div:has(#wca-wild)+[data-testid="stVerticalBlockBorderWrapper"]{'
-            'border-color:#2d6a4f!important;'
-            'box-shadow:0 0 20px rgba(45,106,79,0.4),0 0 40px rgba(45,106,79,0.2)!important;'
-            'animation:wildGlow 3s ease-in-out infinite!important;'
-            '}'
-            '</style>'
             '<p style="color:#2d6a4f;font-weight:700;font-size:1.05rem;margin:8px 0 4px 0;">🎲 Your Wild Adventure Awaits</p>'
-            '<div id="wca-wild"></div>',
+            '<div id="gwia-wild"></div>',
             unsafe_allow_html=True
         )
 
-    html_card = f"""<div class="wc-shell">
+    _card_class = "wc-shell wc-wild-idea" if mode == "get_wild" else "wc-shell"
+    html_card = f"""<div class="{_card_class}">
   <div class="wc-img-wrap">
     <img src="{img_url}" class="wc-img" alt="">
     <div class="wc-tier" style="border-left: 3px solid {_tier_color};">✦ {tier_name}</div>
