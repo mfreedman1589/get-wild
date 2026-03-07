@@ -177,7 +177,7 @@ custom_css = """
     .material-symbols-sharp { font-family: 'Material Symbols Rounded' !important; }
 
     /* Top 3 button — first column in the two-button action row */
-    [data-testid="stHorizontalBlock"] [data-testid="stColumn"]:first-child button {
+    [data-testid="stHorizontalBlock"] [data-testid="stColumn"]:first-child .stButton > button {
         background-color: #eaf5ef !important;
         color: #2d6a4f !important;
         border: 1.5px solid #2d6a4f !important;
