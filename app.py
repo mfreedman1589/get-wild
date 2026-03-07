@@ -270,17 +270,16 @@ custom_css = """
     button[data-testid*="primary"] div,
     button[data-testid*="primary"] span { color: white !important; }
 
-    /* Keyword toggle — declared AFTER global button rule so !important wins on min-height */
+    /* Keyword toggle — match filter pill styling exactly */
     [data-testid="kw_toggle"] button {
-        color: #4a7c5f !important;
-        border: 1px solid #c8e6c9 !important;
-        background: transparent !important;
-        border-radius: 20px !important;
-        font-size: 12px !important;
+        background: #eaf5ef !important;
+        border: 1px solid #e0e0e0 !important;
+        border-radius: 10px !important;
+        font-size: 13px !important;
         font-weight: 600 !important;
-        min-height: 32px !important;
-        padding: 6px 14px !important;
-        width: fit-content !important;
+        color: #4a5568 !important;
+        min-height: 38px !important;
+        width: 100% !important;
     }
 
     /* POINTS HERO (Rewards tab) */
@@ -2586,9 +2585,6 @@ else:
                 if sc_key not in st.session_state or st.session_state[sc_key] not in options:
                     st.session_state[sc_key] = default if default in options else options[0]
                 try:
-                    val = st.segmented_control(label, options, key=sc_key, selection_mode="single")
-                    return val if val is not None else st.session_state[sc_key]
-                except TypeError:
                     val = st.segmented_control(label, options, key=sc_key)
                     return val if val is not None else st.session_state[sc_key]
                 except AttributeError:
