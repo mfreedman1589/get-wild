@@ -370,17 +370,6 @@ custom_css = """
         }
     }
 
-    /* Keyword toggle — last rule, overrides everything */
-    [data-testid="kw_toggle"] button {
-        background: #eaf5ef !important;
-        border: 1px solid #e0e0e0 !important;
-        border-radius: 10px !important;
-        font-size: 13px !important;
-        font-weight: 600 !important;
-        color: #6b7280 !important;
-        min-height: 38px !important;
-        width: 100% !important;
-    }
 </style>
 """
 st.markdown(custom_css, unsafe_allow_html=True)
@@ -2616,9 +2605,14 @@ else:
 
             # Row 7: Specific keyword (optional)
             st.markdown('<div style="margin-top:16px;"></div>', unsafe_allow_html=True)
-            if st.button("🔍 Looking for Something Specific?", type="secondary", use_container_width=False, key="kw_toggle"):
-                st.session_state.show_keyword = not st.session_state.show_keyword
-            if st.session_state.show_keyword:
+            kw_expanded = st.segmented_control(
+                "🔍 Keyword",
+                options=["🔍 Looking for Something Specific?"],
+                default=None,
+                key="kw_toggle_seg",
+            )
+            show_keyword = kw_expanded is not None
+            if show_keyword:
                 ui_spec = st.text_input("Keyword", value=st.session_state.mem_spec, placeholder="e.g., 'romantic', 'live jazz', 'axe throwing'", label_visibility="collapsed")
             else:
                 ui_spec = st.session_state.mem_spec
