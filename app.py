@@ -278,53 +278,11 @@ custom_css = """
         .stTextInput > label, .stSelectbox > label, .stRadio > label,
         .stCheckbox > label, .stTextArea > label, .stMultiSelect > label,
         .stSlider > label, .stNumberInput > label { color: #f0f0f0 !important; }
-        .wc-name { color: #f0f0f0 !important; }
-        .wc-meta, .wc-address { color: #999 !important; }
-        .wc-pitch { color: #ccc !important; }
-        .wc-hr { border-color: #333 !important; }
-        .wc-util-link { color: #666 !important; }
-        .wc-util-link:hover { color: #999 !important; }
         .wc-tag { background: #1a3320 !important; border-color: #2a5230 !important; }
         .gw-tagline { color: #9ca3af !important; }
     }
 
     @keyframes fadeSlideUp { from {opacity: 0; transform: translateY(20px);} to { opacity: 1; transform: translateY(0); } }
-    @keyframes wildGlow {
-        0%, 100% { box-shadow: 0 0 8px 2px rgba(82,183,136,0.4); }
-        50%       { box-shadow: 0 0 24px 8px rgba(82,183,136,0.8); }
-    }
-    @keyframes wildEntrance {
-        from { opacity: 0; transform: translateY(10px); }
-        to   { opacity: 1; transform: translateY(0); }
-    }
-
-    /* Wild Idea card — dark premium */
-    .wc-wild-idea .wc-name { color: #ffffff !important; }
-    .wc-wild-idea .wc-meta { color: #e0f0e8 !important; }
-    .wc-wild-idea .wc-address { color: #e0f0e8 !important; }
-    .wc-wild-idea .wc-pitch { color: #e0f0e8 !important; }
-    .wc-wild-idea .wc-hr { border-color: rgba(82,183,136,0.3) !important; }
-    .wc-wild-idea .wc-tag { background: rgba(82,183,136,0.15) !important; color: #a8e6c8 !important; border-color: #52b788 !important; }
-    .wc-wild-idea .wc-util-link { color: #a8e6c8 !important; }
-    .wc-wild-idea .wc-util-sep { color: rgba(82,183,136,0.5) !important; }
-    .wc-wild-idea .wc-vibe-pill { background: rgba(82,183,136,0.2) !important; color: #e0f0e8 !important; }
-    .wc-wild-idea a { color: #a8d5b5 !important; }
-    div:has(#gwia-wild) ~ [data-testid="stVerticalBlockBorderWrapper"],
-    div:has(#gwia-wild) ~ div [data-testid="stVerticalBlockBorderWrapper"],
-    [data-testid="stVerticalBlock"]:has(#gwia-wild) [data-testid="stVerticalBlockBorderWrapper"],
-    :has(#gwia-wild) [data-testid="stVerticalBlockBorderWrapper"] {
-        background: #0a1f14 !important;
-        border: 3px solid #52b788 !important;
-        animation: wildEntrance 0.5s ease-out, wildGlow 2.5s ease-in-out 0.5s infinite;
-    }
-    div:has(#gwia-wild) ~ [data-testid="stVerticalBlockBorderWrapper"] .stButton > button,
-    div:has(#gwia-wild) ~ div [data-testid="stVerticalBlockBorderWrapper"] .stButton > button,
-    [data-testid="stVerticalBlock"]:has(#gwia-wild) [data-testid="stVerticalBlockBorderWrapper"] .stButton > button,
-    :has(#gwia-wild) [data-testid="stVerticalBlockBorderWrapper"] .stButton > button {
-        background: transparent !important;
-        color: #ffffff !important;
-        border: 1.5px solid rgba(82,183,136,0.6) !important;
-    }
 
     /* GPS COMPONENT — hide white box, show only the icon button */
     [data-testid="stCustomComponentV1"] {
@@ -359,7 +317,7 @@ custom_css = """
 
     @media (prefers-color-scheme: dark) {
         html, body, [data-testid="stAppViewContainer"],
-        [data-testid="stApp"],
+        [data-testid="stApp"]:not(:has(.wc-getwild)),
         [data-testid="stMain"],
         [data-testid="stHeader"] {
             background-color: #f4faf6 !important;
@@ -381,10 +339,39 @@ custom_css = """
             border-color: #e0e0e0 !important;
         }
 
-        /* Cards */
-        [data-testid="stVerticalBlock"] > div {
-            color: #1a1a1a !important;
-        }
+    }
+
+    /* Restore card text to dark unconditionally (overrides any dark-mode inheritance) */
+    .wc-name { color: #1a1a1a !important; }
+    .wc-meta { color: #4a4a4a !important; }
+    .wc-address { color: #4a4a4a !important; }
+    .wc-pitch { color: #2a2a2a !important; }
+
+    /* GET WILD card — dark green treatment */
+    .wc-getwild {
+        background: #0a1f14 !important;
+        border: 3px solid #52b788 !important;
+        border-radius: 16px !important;
+        animation: wildEntrance 0.5s ease-out,
+                   wildGlow 2.5s ease-in-out 0.5s infinite;
+    }
+    .wc-getwild .wc-name { color: #ffffff !important; }
+    .wc-getwild .wc-meta { color: #a8d5b5 !important; }
+    .wc-getwild .wc-pitch { color: #e0f0e8 !important; }
+    .wc-getwild .wc-address { color: #a8d5b5 !important; }
+    .wc-getwild a { color: #a8d5b5 !important; }
+
+    div:has(> div.wc-getwild) {
+        background: #0a1f14 !important;
+        border: 3px solid #52b788 !important;
+        border-radius: 16px !important;
+        animation: wildEntrance 0.5s ease-out,
+                   wildGlow 2.5s ease-in-out 0.5s infinite;
+    }
+    div:has(> div.wc-getwild) .stButton > button {
+        background: transparent !important;
+        color: #ffffff !important;
+        border: 1px solid #52b788 !important;
     }
 
 </style>
@@ -1524,7 +1511,7 @@ def render_wild_idea_card(idea, location_input, user_id):
     )
     addr_html = f'<div class="wc-address">📍 {address}</div>' if address else ''
 
-    html_card = f"""<div class="wc-shell wc-wild-idea">
+    html_card = f"""<div class="wc-shell">
   <div class="wc-img-wrap">
     <img src="{img_url}" class="wc-img" alt="">
     <div class="wc-tier" style="border-left: 3px solid #52b788;">✦ Wild Idea</div>
@@ -1539,8 +1526,6 @@ def render_wild_idea_card(idea, location_input, user_id):
     <div class="wc-tags">{tags_html}</div>
   </div>
 </div>"""
-
-    st.markdown('<div id="gwia-wild"></div>', unsafe_allow_html=True)
 
     with st.container(border=True):
         st.markdown(html_card, unsafe_allow_html=True)
@@ -2130,15 +2115,7 @@ def render_spot_card(spot, location_input, user_id, index, mode):
         f'</div>'
     )
 
-    # GET WILD: inject anchor so global #gwia-wild CSS applies dark card treatment
-    if mode == "get_wild":
-        st.markdown(
-            '<p style="color:#2d6a4f;font-weight:700;font-size:1.05rem;margin:8px 0 4px 0;">🎲 Your Wild Adventure Awaits</p>'
-            '<div id="gwia-wild"></div>',
-            unsafe_allow_html=True
-        )
-
-    _card_class = "wc-shell wc-wild-idea" if mode == "get_wild" else "wc-shell"
+    _card_class = "wc-shell wc-getwild" if mode == "get_wild" else "wc-shell"
     html_card = f"""<div class="{_card_class}">
   <div class="wc-img-wrap">
     <img src="{img_url}" class="wc-img" alt="">
