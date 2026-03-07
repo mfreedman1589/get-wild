@@ -319,6 +319,39 @@ custom_css = """
     footer {visibility: hidden;}
     [data-testid="stToolbar"] {visibility: hidden;}
     [data-testid="stDecoration"] {visibility: hidden;}
+
+    /* Force light mode — ignore system dark mode preference */
+    :root { color-scheme: light; }
+
+    @media (prefers-color-scheme: dark) {
+        html, body, [data-testid="stAppViewContainer"],
+        [data-testid="stApp"],
+        [data-testid="stMain"],
+        [data-testid="stHeader"] {
+            background-color: #f4faf6 !important;
+            color: #1a1a1a !important;
+            color-scheme: light !important;
+        }
+
+        /* Inputs */
+        input, textarea, select {
+            background-color: #ffffff !important;
+            color: #1a1a1a !important;
+        }
+
+        /* Pills / segmented controls */
+        [data-testid="stBaseButton-secondary"],
+        [data-testid*="stSegmentedControl"] * {
+            background-color: #ffffff !important;
+            color: #1a1a1a !important;
+            border-color: #e0e0e0 !important;
+        }
+
+        /* Cards */
+        [data-testid="stVerticalBlock"] > div {
+            color: #1a1a1a !important;
+        }
+    }
 </style>
 """
 st.markdown(custom_css, unsafe_allow_html=True)
