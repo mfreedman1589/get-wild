@@ -227,13 +227,13 @@ custom_css = """
 
     .wc-body { padding: 16px; }
     .wc-name { font-size: 19px; font-weight: 700; color: #1a1a1a; margin: 0 0 5px 0; line-height: 1.3; }
-    .wc-meta { font-size: 0.78rem; color: #888; margin-bottom: 4px; font-weight: 500; }
+    .wc-meta { font-size: 0.78rem; color: #4a4a4a; margin-bottom: 4px; font-weight: 500; }
     .wc-vibe-row { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
     .wc-vibe-pill { font-size: 12px; color: #444; background: #f0f0f0; border-radius: 12px; padding: 3px 10px; font-weight: 500; }
     @media (prefers-color-scheme: dark) { .wc-vibe-pill { background: #2a2a2a; color: #ccc; } }
-    .wc-address { font-size: 12px; color: #aaa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 12px; }
+    .wc-address { font-size: 12px; color: #4a4a4a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 12px; }
     .wc-hr { border: none; border-top: 1px solid #f0f0f0; margin: 12px 0; }
-    .wc-pitch { font-size: 14px; line-height: 1.6; color: #444; margin: 0 0 8px 0; }
+    .wc-pitch { font-size: 14px; line-height: 1.6; color: #2a2a2a; margin: 0 0 8px 0; }
     .wc-tags { margin: 0 0 2px 0; }
     .wc-tag { display: inline-block; background: #e8f5e9; color: #2e7d32; padding: 3px 10px; border-radius: 12px; font-size: 0.73rem; font-weight: 600; margin: 2px 4px 2px 0; border: 1px solid #c8e6c9; }
 
@@ -288,9 +288,24 @@ custom_css = """
 
     @keyframes fadeSlideUp { from {opacity: 0; transform: translateY(20px);} to { opacity: 1; transform: translateY(0); } }
     @keyframes wildGlow {
-        0%, 100% { box-shadow: 0 0 20px rgba(45,106,79,0.4), 0 0 40px rgba(45,106,79,0.2); }
-        50%       { box-shadow: 0 0 30px rgba(45,106,79,0.6), 0 0 60px rgba(45,106,79,0.3); }
+        0%, 100% { box-shadow: 0 0 8px 2px rgba(82,183,136,0.4); }
+        50%       { box-shadow: 0 0 24px 8px rgba(82,183,136,0.8); }
     }
+    @keyframes wildEntrance {
+        from { opacity: 0; transform: translateY(10px); }
+        to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Wild Idea card — dark premium */
+    .wc-wild-idea .wc-name { color: #ffffff !important; }
+    .wc-wild-idea .wc-meta { color: #e0f0e8 !important; }
+    .wc-wild-idea .wc-address { color: #e0f0e8 !important; }
+    .wc-wild-idea .wc-pitch { color: #e0f0e8 !important; }
+    .wc-wild-idea .wc-hr { border-color: rgba(82,183,136,0.3) !important; }
+    .wc-wild-idea .wc-tag { background: rgba(82,183,136,0.15) !important; color: #a8e6c8 !important; border-color: #52b788 !important; }
+    .wc-wild-idea .wc-util-link { color: #a8e6c8 !important; }
+    .wc-wild-idea .wc-util-sep { color: rgba(82,183,136,0.5) !important; }
+    .wc-wild-idea .wc-vibe-pill { background: rgba(82,183,136,0.2) !important; color: #e0f0e8 !important; }
 
     /* GPS COMPONENT — hide white box, show only the icon button */
     [data-testid="stCustomComponentV1"] {
@@ -309,7 +324,7 @@ custom_css = """
     [data-testid="stColumn"]:empty { display: none !important; }
 
     /* TEXT CONTRAST */
-    .wc-address { color: #4a5568 !important; }
+    .wc-address { color: #4a4a4a !important; }
     button[data-testid="stBaseButton-secondary"] { color: #1a1a1a !important; }
     .stSelectbox label, .stRadio > label, [data-testid="stWidgetLabel"] { color: #374151 !important; }
 
@@ -1489,10 +1504,10 @@ def render_wild_idea_card(idea, location_input, user_id):
     )
     addr_html = f'<div class="wc-address">📍 {address}</div>' if address else ''
 
-    html_card = f"""<div class="wc-shell">
+    html_card = f"""<div class="wc-shell wc-wild-idea">
   <div class="wc-img-wrap">
     <img src="{img_url}" class="wc-img" alt="">
-    <div class="wc-tier" style="border-left: 3px solid #2d6a4f;">✦ Wild Idea</div>
+    <div class="wc-tier" style="border-left: 3px solid #52b788;">✦ Wild Idea</div>
   </div>
   <div class="wc-body">
     <div class="wc-name">{emoji} {name}</div>
@@ -1504,6 +1519,23 @@ def render_wild_idea_card(idea, location_input, user_id):
     <div class="wc-tags">{tags_html}</div>
   </div>
 </div>"""
+
+    st.markdown(
+        '<style>'
+        'div:has(#gwia-wild)+[data-testid="stVerticalBlockBorderWrapper"]{'
+        'background:#0a1f14!important;'
+        'border:3px solid #52b788!important;'
+        'animation:wildEntrance 0.5s ease-out,wildGlow 2.5s ease-in-out 0.5s infinite!important;'
+        '}'
+        'div:has(#gwia-wild)+[data-testid="stVerticalBlockBorderWrapper"] .stButton>button{'
+        'background:transparent!important;'
+        'color:#ffffff!important;'
+        'border:1.5px solid rgba(82,183,136,0.6)!important;'
+        '}'
+        '</style>'
+        '<div id="gwia-wild"></div>',
+        unsafe_allow_html=True,
+    )
 
     with st.container(border=True):
         st.markdown(html_card, unsafe_allow_html=True)
@@ -2936,12 +2968,11 @@ else:
             for _b in _earned_rows:
                 _bid  = _b['badge_id']
                 _meta = _badges_by_id.get(_bid, {})
-                _bg   = _CAT_BG.get(_BADGE_CATS.get(_bid, 'Explorer'), '#f5f5f5')
                 _cells.append(
-                    f'<div style="background:{_bg};border-radius:12px;padding:12px 6px;text-align:center;">'
-                    f'<div style="font-size:28px;line-height:1.2;">{_b.get("badge_emoji","🏅")}</div>'
-                    f'<div style="font-size:11px;font-weight:700;margin-top:4px;">{_b.get("badge_name","")}</div>'
-                    f'<div style="font-size:10px;color:#888;margin-top:2px;">{_meta.get("desc","")}</div>'
+                    f'<div style="background:linear-gradient(135deg,#2d6a4f,#52b788);border-radius:12px;padding:12px 6px;text-align:center;">'
+                    f'<div style="font-size:1.6em;line-height:1.2;">{_b.get("badge_emoji","🏅")}</div>'
+                    f'<div style="font-size:11px;font-weight:700;margin-top:4px;color:#ffffff;">{_b.get("badge_name","")}</div>'
+                    f'<div style="font-size:10px;color:rgba(255,255,255,0.8);margin-top:2px;">{_meta.get("desc","")}</div>'
                     f'</div>'
                 )
             _render_badge_grid(_cells)
