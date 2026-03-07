@@ -184,19 +184,6 @@ custom_css = """
         min-height: 48px !important;
     }
 
-    /* Keyword toggle — targeted via Streamlit key data-testid */
-    [data-testid="kw_toggle"] button {
-        color: #4a7c5f !important;
-        border: 1px solid #c8e6c9 !important;
-        background: transparent !important;
-        border-radius: 20px !important;
-        font-size: 11px !important;
-        font-weight: 600 !important;
-        min-height: 32px !important;
-        padding: 6px 14px !important;
-        width: fit-content !important;
-    }
-
     /* Action button row — enforce equal height on both columns */
     [data-testid="stHorizontalBlock"] [data-testid="stColumn"] .stButton > button {
         min-height: 48px !important;
@@ -270,7 +257,10 @@ custom_css = """
 
     /* SEGMENTED CONTROLS (pill filters) */
     [data-testid="stSegmentedControl"] { background: #eaf5ef !important; border-radius: 10px !important; }
-    [data-testid="stSegmentedControl"] label { font-weight: 600 !important; font-size: 13px !important; }
+    [data-testid="stSegmentedControl"] label,
+    [data-testid="stSegmentedControl"] button { font-size: 13px !important; font-weight: 600 !important; }
+    [data-testid="stSegmentedControl"] button[aria-pressed="true"] { background: #ffffff !important; color: #2d6a4f !important; box-shadow: 0 1px 3px rgba(0,0,0,0.1) !important; }
+    [data-testid="stSegmentedControl"] button:not([aria-pressed="true"]) { background: transparent !important; color: #4a5568 !important; }
 
     /* ACTION BUTTONS */
     .stButton > button { font-weight: 700 !important; min-height: 48px !important; border-radius: 12px !important; white-space: nowrap !important; }
@@ -279,6 +269,19 @@ custom_css = """
     button[data-testid*="primary"] p,
     button[data-testid*="primary"] div,
     button[data-testid*="primary"] span { color: white !important; }
+
+    /* Keyword toggle — declared AFTER global button rule so !important wins on min-height */
+    [data-testid="kw_toggle"] button {
+        color: #4a7c5f !important;
+        border: 1px solid #c8e6c9 !important;
+        background: transparent !important;
+        border-radius: 20px !important;
+        font-size: 12px !important;
+        font-weight: 600 !important;
+        min-height: 32px !important;
+        padding: 6px 14px !important;
+        width: fit-content !important;
+    }
 
     /* POINTS HERO (Rewards tab) */
     .gw-points-hero { background: linear-gradient(135deg, #2d6a4f, #52b788); border-radius: 16px; padding: 24px; text-align: center; color: white; margin-bottom: 16px; }
@@ -2583,6 +2586,9 @@ else:
                 if sc_key not in st.session_state or st.session_state[sc_key] not in options:
                     st.session_state[sc_key] = default if default in options else options[0]
                 try:
+                    val = st.segmented_control(label, options, key=sc_key, selection_mode="single")
+                    return val if val is not None else st.session_state[sc_key]
+                except TypeError:
                     val = st.segmented_control(label, options, key=sc_key)
                     return val if val is not None else st.session_state[sc_key]
                 except AttributeError:
@@ -2624,7 +2630,7 @@ else:
             else:
                 ui_spec = st.session_state.mem_spec
 
-            st.markdown('<div style="margin-top:16px;border-top:1px solid #e8f5e8;margin-bottom:4px;"></div>', unsafe_allow_html=True)
+            st.markdown('<div style="margin:16px 0;border-top:1px solid #e0ece4;"></div>', unsafe_allow_html=True)
             btn_col1, btn_col2 = st.columns(2)
             with btn_col1:
                 top_3_clicked = st.button("🌟 Top 3 Recommendations", use_container_width=True)
