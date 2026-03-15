@@ -1645,23 +1645,24 @@ def render_wild_idea_card(idea, location_input, user_id):
     )
     addr_html = f'<div class="wc-address">📍 {address}</div>' if address else ''
 
-    html_card = f"""<div class="wc-shell">
-  <div class="wc-img-wrap">
-    <img src="{img_url}" class="wc-img" alt="">
-    <div class="wc-tier" style="border-left: 3px solid #52b788;">✦ Wild Idea</div>
-  </div>
-  <div class="wc-body">
-    <div class="wc-name">{emoji} {name}</div>
-    {rating_html}
-    <div class="wc-meta">{category}</div>
-    {vibe_pills_html}{addr_html}
-    {hours_html}
-    {utility_html}
-    <hr class="wc-hr">
-    <p class="wc-pitch">{why_now}</p>
-    <div class="wc-tags">{tags_html}</div>
-  </div>
-</div>"""
+    html_card = (
+        f'<div class="wc-shell">'
+        f'<div class="wc-img-wrap">'
+        f'<img src="{img_url}" class="wc-img" alt="">'
+        f'<div class="wc-tier" style="border-left:3px solid #52b788;">✦ Wild Idea</div>'
+        f'</div>'
+        f'<div class="wc-body">'
+        f'<div class="wc-name">{emoji} {name}</div>'
+        f'{rating_html}'
+        f'<div class="wc-meta">{category}</div>'
+        f'{vibe_pills_html}{addr_html}'
+        f'{hours_html}{utility_html}'
+        f'<hr class="wc-hr">'
+        f'<p class="wc-pitch">{why_now}</p>'
+        f'<div class="wc-tags">{tags_html}</div>'
+        f'</div>'
+        f'</div>'
+    )
 
     with st.container(border=True):
         st.markdown(html_card, unsafe_allow_html=True)
@@ -2313,25 +2314,25 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
     )
 
     _card_class = "wc-shell wc-getwild" if mode == "get_wild" else "wc-shell"
-    html_card = f"""<div class="{_card_class}">
-  <div class="wc-img-wrap">
-    <img src="{img_url}" class="wc-img" alt="">
-    <div class="wc-tier" style="border-left: 3px solid {_tier_color};">✦ {tier_name}</div>
-  </div>
-  <div class="wc-body">
-    <div class="wc-name">{title_prefix} {spot['name']}</div>
-    {rating_html}
-    {picked_html}
-    <div class="wc-meta">{category}</div>
-    {vibe_pills_html}{event_time_html}<div class="wc-address">📍 {address}</div>
-    {hours_html}
-    {utility_html}
-    <hr class="wc-hr">
-    <p class="wc-pitch">{pitch}</p>
-    <div class="wc-tags">{tags_html}</div>
-  </div>
-</div>
-"""
+    html_card = (
+        f'<div class="{_card_class}">'
+        f'<div class="wc-img-wrap">'
+        f'<img src="{img_url}" class="wc-img" alt="">'
+        f'<div class="wc-tier" style="border-left:3px solid {_tier_color};">✦ {tier_name}</div>'
+        f'</div>'
+        f'<div class="wc-body">'
+        f'<div class="wc-name">{title_prefix} {spot["name"]}</div>'
+        f'{rating_html}{picked_html}'
+        f'<div class="wc-meta">{category}</div>'
+        f'{vibe_pills_html}{event_time_html}'
+        f'<div class="wc-address">📍 {address}</div>'
+        f'{hours_html}{utility_html}'
+        f'<hr class="wc-hr">'
+        f'<p class="wc-pitch">{pitch}</p>'
+        f'<div class="wc-tags">{tags_html}</div>'
+        f'</div>'
+        f'</div>'
+    )
     with st.container(border=True):
         st.markdown(html_card, unsafe_allow_html=True)
         col1, col2, col3 = st.columns(3)
