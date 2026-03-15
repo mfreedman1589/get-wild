@@ -444,6 +444,7 @@ if 'badges_backfilled' not in st.session_state: st.session_state.badges_backfill
 if 'is_loading' not in st.session_state: st.session_state.is_loading = False
 if 'show_feedback_form' not in st.session_state: st.session_state.show_feedback_form = False
 if 'mem_outdoor_vibe' not in st.session_state: st.session_state.mem_outdoor_vibe = None
+if 'show_outdoor_vibe' not in st.session_state: st.session_state.show_outdoor_vibe = False
 if 'pref_scores' not in st.session_state: st.session_state.pref_scores = None
 if 'show_keyword' not in st.session_state: st.session_state.show_keyword = False
 if 'referral_code' not in st.session_state:
@@ -1158,7 +1159,7 @@ def build_tier_queries(filters_dict, profile=None, preference_scores=None):
     group        = filters_dict.get('group', '')
     spend        = filters_dict.get('spend', '💰 Moderate')
     specific     = (filters_dict.get('specific') or '').strip()
-    outdoor_vibe = filters_dict.get('outdoor_vibe')  # Adventure | Nature | Outdoor Dining | None
+    outdoor_vibe = filters_dict.get('outdoor_vibe')  # Adventure | Nature | Urban Outdoor | None
     is_free      = (spend == "🆓 Free")
 
     _gm = {"Date": "intimate romantic", "Family Outing": "family friendly kid-friendly",
@@ -1205,11 +1206,11 @@ def build_tier_queries(filters_dict, profile=None, preference_scores=None):
     # Just Drinks/Coffee
     if food == "Just Drinks/Coffee":
         if vibe == "Outside":
-            if outdoor_vibe == "Outdoor Dining":
+            if outdoor_vibe == "Urban Outdoor":
                 return (
-                    f"popular outdoor bar beer garden patio restaurant {_gm}".strip(),
-                    f"rooftop bar outdoor dining unique patio cocktails {_gm}".strip(),
-                    f"hidden outdoor dining patio local craft drinks {_gm}".strip(),
+                    f"popular rooftop bar outdoor beer garden waterfront bar patio {_gm}".strip(),
+                    f"rooftop bar outdoor cocktails unique patio skyline view drinks {_gm}".strip(),
+                    f"hidden rooftop outdoor bar local craft drinks secret outdoor patio {_gm}".strip(),
                 )
             return (
                 f"popular outdoor bar beer garden brewery patio {_gm}".strip(),
@@ -1233,21 +1234,21 @@ def build_tier_queries(filters_dict, profile=None, preference_scores=None):
     if vibe == "Outside":
         if outdoor_vibe == "Adventure":
             return (
-                f"popular park hiking trail outdoor sports climbing kayaking {_gm}".strip(),
-                f"unique adventure activity rock climbing kayaking zip-line sports complex {_gm}".strip(),
-                f"hidden trail waterfall secret outdoor adventure off the beaten path {_gm}".strip(),
+                f"popular hiking trail kayak launch outdoor sports climbing campground {_gm}".strip(),
+                f"rock climbing bouldering zip line mountain bike trail whitewater kayaking {_gm}".strip(),
+                f"hidden trail obstacle course backcountry off the beaten path adventure sports {_gm}".strip(),
             )
         elif outdoor_vibe == "Nature":
             return (
-                f"popular park botanical garden nature preserve scenic overlook {_gm}".strip(),
-                f"unique botanical garden arboretum wildlife sanctuary scenic viewpoint {_gm}".strip(),
-                f"hidden nature trail waterfall secret garden local nature gem {_gm}".strip(),
+                f"popular botanical garden wildlife refuge scenic overlook nature preserve {_gm}".strip(),
+                f"arboretum bird watching wildlife sanctuary national park natural feature {_gm}".strip(),
+                f"hidden nature trail secret garden local nature gem waterfall wildlife refuge {_gm}".strip(),
             )
-        elif outdoor_vibe == "Outdoor Dining":
+        elif outdoor_vibe == "Urban Outdoor":
             return (
-                f"popular outdoor dining patio restaurant beer garden {_gm}".strip(),
-                f"rooftop restaurant outdoor dining unique patio farm to table {_gm}".strip(),
-                f"hidden outdoor dining patio local gem secret garden restaurant {_gm}".strip(),
+                f"popular rooftop bar skyline view waterfront park outdoor amphitheater plaza {_gm}".strip(),
+                f"rooftop bar outdoor beer garden waterfront unique city outdoor experience {_gm}".strip(),
+                f"hidden rooftop outdoor plaza local gem secret city outdoor waterfront {_gm}".strip(),
             )
         return (
             f"popular park hiking trail nature preserve outdoor recreation {_gm}".strip(),
@@ -1953,7 +1954,33 @@ def get_ai_recommendations(places_data, live_events_data, weather_report, filter
 
     outdoor_vibe_rule = ""
     if filters_dict.get('outdoor_vibe') and filters_dict.get('vibe') == "Outside":
-        outdoor_vibe_rule = f"OUTDOOR VIBE: User wants a '{filters_dict['outdoor_vibe']}' outdoor experience — prioritize venues that match this style accordingly."
+        _ov = filters_dict['outdoor_vibe']
+        if _ov == "Adventure":
+            outdoor_vibe_rule = (
+                "OUTDOOR VIBE: User wants an 'Adventure' outdoor experience — "
+                "active physical challenge: hiking trails, kayaking, rock climbing, zip lines, "
+                "mountain biking, obstacle courses, sports complexes. "
+                "Adventure = active physical challenge. Nature = peaceful immersive natural environment. "
+                "These are different — do not interchange them."
+            )
+        elif _ov == "Nature":
+            outdoor_vibe_rule = (
+                "OUTDOOR VIBE: User wants a 'Nature' outdoor experience — "
+                "peaceful, immersive natural environments: botanical gardens, wildlife refuges, "
+                "scenic overlooks, nature preserves, arboretums, bird watching spots. "
+                "Nature = peaceful immersive natural environment. Adventure = active physical challenge. "
+                "These are different — do not interchange them."
+            )
+        elif _ov == "Urban Outdoor":
+            outdoor_vibe_rule = (
+                "OUTDOOR VIBE: User wants an 'Urban Outdoor' experience — "
+                "city outdoor settings: rooftop bars, skyline views, waterfront parks, "
+                "outdoor amphitheaters, plazas, outdoor beer gardens in the city. "
+                "Urban Outdoor = city outdoor experience, rooftops, waterfronts, plazas — "
+                "not nature or hiking."
+            )
+        else:
+            outdoor_vibe_rule = f"OUTDOOR VIBE: User wants a '{_ov}' outdoor experience — prioritize venues that match this style."
 
     specific_rule = ""
     if filters_dict.get('specific'):
@@ -2821,13 +2848,38 @@ else:
             ui_vibe_d = _seg("🌍 Setting?", _VIBE_OPTS, _INT_TO_VIBE.get(st.session_state.mem_vibe, "✨ Anywhere"), "seg_vibe")
             ui_vibe   = _VIBE_TO_INT.get(ui_vibe_d, "Doesn't Matter")
 
-            # Row 3b: Outdoor Vibe (only visible when Outside is selected)
-            _OUTDOOR_VIBE_OPTS = ["🥾 Adventure", "🌳 Nature", "🍻 Outdoor Dining"]
-            _OUTDOOR_VIBE_MAP  = {"🥾 Adventure": "Adventure", "🌳 Nature": "Nature", "🍻 Outdoor Dining": "Outdoor Dining"}
+            # Row 3b: Outdoor Vibe sub-filter (collapsed toggle, only when Outside selected)
+            _OUTDOOR_VIBE_OPTS = ["🥾 Adventure", "🌳 Nature", "🏙️ Urban Outdoor"]
+            _OUTDOOR_VIBE_MAP  = {"🥾 Adventure": "Adventure", "🌳 Nature": "Nature", "🏙️ Urban Outdoor": "Urban Outdoor"}
+            _OUTDOOR_INV_MAP   = {v: k for k, v in _OUTDOOR_VIBE_MAP.items()}
             if ui_vibe == "Outside":
-                _ov_d = st.segmented_control("🌲 Outside Vibe?", _OUTDOOR_VIBE_OPTS, default=None, key="seg_outdoor_vibe")
-                ui_outdoor_vibe = _OUTDOOR_VIBE_MAP.get(_ov_d)
+                _ov_active = st.session_state.mem_outdoor_vibe
+                _ov_btn_label = (
+                    f"🌲 Outdoor Vibe: {_ov_active} ✓"
+                    if _ov_active else "🌲 Narrow your outdoor vibe? (optional)"
+                )
+                _ov_toggle = st.segmented_control(
+                    "Outdoor Vibe",
+                    options=[_ov_btn_label],
+                    default=_ov_btn_label if st.session_state.show_outdoor_vibe else None,
+                    key="ov_toggle_seg",
+                    label_visibility="collapsed",
+                )
+                show_outdoor_vibe = _ov_toggle is not None
+                st.session_state.show_outdoor_vibe = show_outdoor_vibe
+                if show_outdoor_vibe:
+                    _ov_sel = st.segmented_control(
+                        "Outside Vibe?",
+                        _OUTDOOR_VIBE_OPTS,
+                        default=_OUTDOOR_INV_MAP.get(_ov_active),
+                        key="seg_outdoor_vibe",
+                        label_visibility="collapsed",
+                    )
+                    ui_outdoor_vibe = _OUTDOOR_VIBE_MAP.get(_ov_sel)
+                else:
+                    ui_outdoor_vibe = _ov_active  # preserve filter when collapsed
             else:
+                st.session_state.show_outdoor_vibe = False
                 ui_outdoor_vibe = None
 
             # Row 4: Food
@@ -2907,6 +2959,7 @@ else:
                 st.session_state.current_results = None
                 st.session_state.is_loading = False
                 st.session_state.session_seen_spots = []
+                st.session_state.show_outdoor_vibe = False  # collapse toggle, preserve mem_outdoor_vibe
                 st.rerun()
                 
             if st.session_state.trigger_fetch:
