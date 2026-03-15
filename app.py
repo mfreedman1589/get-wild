@@ -1773,6 +1773,7 @@ def get_ai_recommendations(places_data, live_events_data, weather_report, filter
     _excl_lower = {s.lower().strip() for s in (excluded_spots or [])}
 
     def _filter_tier(places):
+        import re as _re
         if _spend_filter == "🆓 Free":
             places = [p for p in places if p.get('priceLevel') not in _PAID_LEVELS]
         elif _spend_filter == "✨ Splurge":
@@ -1781,7 +1782,25 @@ def get_ai_recommendations(places_data, live_events_data, weather_report, filter
             places = [p for p in places if not any(
                 ex in (p.get('displayName', {}).get('text', '') or '').lower() for ex in _excl_lower
             )]
-        return places
+        # Quality filter: remove low-confidence results before sending to GPT
+        filtered = []
+        for p in places:
+            _name = (p.get('displayName', {}).get('text') or '').strip()
+            _addr = (p.get('formattedAddress') or '').strip()
+            _rating = p.get('rating')
+            _reviews = p.get('userRatingCount') or 0
+            _website = p.get('websiteUri') or ''
+            # Skip pure acronyms (all-caps, ≤3 chars, no spaces)
+            if _re.match(r'^[A-Z]{1,3}$', _name):
+                continue
+            # Skip venues with no digit in the address (no street number)
+            if _addr and not _re.search(r'\d', _addr):
+                continue
+            # Skip zero-signal venues: no website, no rating, and fewer than 50 reviews
+            if not _website and not _rating and _reviews < 50:
+                continue
+            filtered.append(p)
+        return filtered
 
     _is_tiered = isinstance(places_data, dict)
     if _is_tiered:
@@ -1791,10 +1810,11 @@ def get_ai_recommendations(places_data, live_events_data, weather_report, filter
         trimmed_places = None  # not used in tiered mode
     else:
         trimmed_places = _filter_tier(list(places_data) if places_data else [])[:8]
-    # Python-level events gate — AI never sees events when food=Full Meal
+    # Python-level events gate — AI never sees events when food=Full Meal or outdoor_vibe=Adventure/Nature
     _food_filter = filters_dict.get('food', '')
-    if _food_filter == 'Full Meal':
-        safe_events_data = []  # hard gate: no events, regardless of what was fetched
+    _outdoor_vibe = filters_dict.get('outdoor_vibe', '')
+    if _food_filter == 'Full Meal' or _outdoor_vibe in ('Adventure', 'Nature'):
+        safe_events_data = []  # hard gate: indoor events incompatible with outdoor-specific searches
     elif isinstance(live_events_data, list):
         safe_events_data = live_events_data[:1]  # cap at 1 event to prevent AI over-indexing
     elif isinstance(live_events_data, str):
@@ -1968,7 +1988,10 @@ def get_ai_recommendations(places_data, live_events_data, weather_report, filter
                 "active physical challenge: hiking trails, kayaking, rock climbing, zip lines, "
                 "mountain biking, obstacle courses, sports complexes. "
                 "Adventure = active physical challenge. Nature = peaceful immersive natural environment. "
-                "These are different — do not interchange them."
+                "These are different — do not interchange them. "
+                "HARD RULE: EXCLUDE any indoor venues, arenas, stadiums, rec centers, gyms, "
+                "or events held inside buildings. Adventure = must be physically outdoors. "
+                "If a venue is ambiguous, exclude it."
             )
         elif _ov == "Nature":
             outdoor_vibe_rule = (
@@ -1976,7 +1999,10 @@ def get_ai_recommendations(places_data, live_events_data, weather_report, filter
                 "peaceful, immersive natural environments: botanical gardens, wildlife refuges, "
                 "scenic overlooks, nature preserves, arboretums, bird watching spots. "
                 "Nature = peaceful immersive natural environment. Adventure = active physical challenge. "
-                "These are different — do not interchange them."
+                "These are different — do not interchange them. "
+                "HARD RULE: EXCLUDE any indoor venues, arenas, stadiums, rec centers, gyms, "
+                "or events held inside buildings. Nature = must be in a natural outdoor environment. "
+                "If a venue is ambiguous, exclude it."
             )
         elif _ov == "Urban Outdoor":
             outdoor_vibe_rule = (
