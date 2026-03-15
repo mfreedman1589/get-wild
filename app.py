@@ -514,7 +514,17 @@ def get_user_preference_scores(user_id):
     try:
         res = supabase.table('saved_spots').select('spot_name, category, rating, mode, user_notes, matched_tags').eq('user_id', user_id).execute()
         spots = res.data or []
-        if not spots:
+
+        # Also pull vibe_preference free text from user profile
+        _vibe_pref_text = ''
+        try:
+            _prof_res = supabase.table('user_profiles').select('vibe_preference').eq('id', user_id).execute()
+            if _prof_res.data:
+                _vibe_pref_text = (_prof_res.data[0].get('vibe_preference') or '').lower()
+        except:
+            pass
+
+        if not spots and not _vibe_pref_text:
             return {}
 
         total_spots = len(spots)
@@ -574,7 +584,14 @@ def get_user_preference_scores(user_id):
                 for tag in _db_tags:
                     avoid_kw_counts[tag] += 1
 
+        # Parse vibe_preference free text — weight 1 per matched keyword
+        if _vibe_pref_text:
+            for kw in _TASTE_KEYWORDS:
+                if kw in _vibe_pref_text:
+                    kw_counts[kw] += 1
+
         print(f"[WildDNA] user={user_id} total_spots={total_spots} threshold={_kw_threshold}")
+        print(f"[WildDNA] vibe_pref={_vibe_pref_text!r}")
         print(f"[WildDNA] kw_counts={dict(kw_counts)}")
         print(f"[WildDNA] avoid_kw_counts={dict(avoid_kw_counts)}")
 
@@ -3437,6 +3454,8 @@ else:
             if _dna_avoid:
                 _pills = "".join(f'<span class="gw-dna-pill" style="background:#fce4ec;color:#b71c1c;">{kw}</span>' for kw in _dna_avoid)
                 st.markdown(f'<div style="margin-bottom:6px;">👎 You tend to skip: {_pills}</div>', unsafe_allow_html=True)
+            if len(_dna_kws) < 4:
+                st.markdown('<p style="color:#9ca3af;font-size:0.82rem;margin-top:4px;">Save and rate more spots to unlock your full Wild DNA 🧬</p>', unsafe_allow_html=True)
         elif _dna_total:
             st.markdown('<p style="color:#9ca3af;font-size:0.88rem;">You\'re still a mystery to us 🎲 Keep exploring!</p>', unsafe_allow_html=True)
         else:
