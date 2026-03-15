@@ -506,6 +506,11 @@ def get_user_preference_scores(user_id):
         "comedy", "sports", "restaurant", "jazz", "cocktail", "theater", "brunch",
     ]
     _STOP_WORDS = {'the', 'a', 'an', 'and', 'or', 'of', 'in', 'at', 'to', 'for', 'by', 'with', 'on', '&'}
+    _GENERIC_STOP = {
+        'restaurant', 'bar', 'place', 'spot', 'venue', 'local', 'great', 'good',
+        'nice', 'new', 'food', 'dining', 'eat', 'drink', 'the', 'and', 'with',
+        'american', 'italian', 'asian', 'modern', 'style',
+    }
     try:
         res = supabase.table('saved_spots').select('spot_name, category, rating, mode, user_notes, matched_tags').eq('user_id', user_id).execute()
         spots = res.data or []
@@ -579,9 +584,10 @@ def get_user_preference_scores(user_id):
             for cat, ratings in cat_ratings.items()
         }
         top_categories = sorted(cat_scores, key=cat_scores.get, reverse=True)[:3]
-        top_keywords = sorted(kw_counts, key=kw_counts.get, reverse=True)[:5]
-        top_keywords = [kw for kw in top_keywords if kw_counts[kw] >= _kw_threshold]
-        avoid_keywords = [kw for kw in avoid_kw_counts if avoid_kw_counts[kw] >= _kw_threshold]
+        top_keywords = sorted(kw_counts, key=kw_counts.get, reverse=True)
+        top_keywords = [kw for kw in top_keywords if kw_counts[kw] >= _kw_threshold and kw not in _GENERIC_STOP]
+        avoid_keywords = [kw for kw in sorted(avoid_kw_counts, key=avoid_kw_counts.get, reverse=True)
+                          if avoid_kw_counts[kw] >= _kw_threshold and kw not in _GENERIC_STOP]
 
         print(f"[WildDNA] top_keywords={top_keywords} avoid_keywords={avoid_keywords}")
 
@@ -590,6 +596,7 @@ def get_user_preference_scores(user_id):
             "top_keywords": top_keywords,
             "avoid_keywords": avoid_keywords,
             "rated_count": len([s for s in spots if (s.get('rating') or 0) >= 4]),
+            "total_spots": total_spots,
         }
     except Exception as _e:
         print(f"[WildDNA] error: {_e}")
@@ -3389,10 +3396,14 @@ else:
 
         # ── WILD DNA ────────────────────────────────────────────────────────
         st.subheader("🧬 Your Wild DNA")
-        st.caption("What we've learned from your explorations")
-        _dna_scores = get_user_preference_scores(_uid_p)
-        _dna_kws    = _dna_scores.get('top_keywords') or []
-        _dna_avoid  = _dna_scores.get('avoid_keywords') or []
+        _dna_scores  = get_user_preference_scores(_uid_p)
+        _dna_kws     = (_dna_scores.get('top_keywords') or [])[:6]
+        _dna_avoid   = (_dna_scores.get('avoid_keywords') or [])[:4]
+        _dna_total   = _dna_scores.get('total_spots') or 0
+        if _dna_total:
+            st.caption(f"Based on your {_dna_total} explorations, you're drawn to:")
+        else:
+            st.caption("Explore spots to build your taste profile")
         if _dna_kws or _dna_avoid:
             if _dna_kws:
                 _pills = "".join(f'<span class="gw-dna-pill">{kw}</span>' for kw in _dna_kws)
@@ -3400,6 +3411,8 @@ else:
             if _dna_avoid:
                 _pills = "".join(f'<span class="gw-dna-pill" style="background:#fce4ec;color:#b71c1c;">{kw}</span>' for kw in _dna_avoid)
                 st.markdown(f'<div style="margin-bottom:6px;">👎 You tend to skip: {_pills}</div>', unsafe_allow_html=True)
+        elif _dna_total:
+            st.markdown('<p style="color:#9ca3af;font-size:0.88rem;">You\'re still a mystery to us 🎲 Keep exploring!</p>', unsafe_allow_html=True)
         else:
             st.markdown('<p style="color:#9ca3af;font-size:0.88rem;">Keep exploring — we\'re learning your vibe 🌿</p>', unsafe_allow_html=True)
         st.markdown('<div style="margin:16px 0;border-top:1px solid #e0ece4;"></div>', unsafe_allow_html=True)
