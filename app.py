@@ -368,6 +368,12 @@ custom_css = """
         animation: wildEntrance 0.5s ease-out,
                    wildGlow 2.5s ease-in-out 0.5s infinite;
     }
+    .wc-rating { font-size: 0.8rem; color: #4a4a4a; margin: 2px 0 4px 0; }
+    .wc-rating-count { color: #888; }
+    .wc-hours { font-size: 0.75rem; margin: 4px 0 8px 0; }
+    .wc-getwild .wc-rating { color: #e0f0e8; }
+    .wc-getwild .wc-rating-count { color: #a8d5b5; }
+    .wc-getwild .wc-hours { color: #a8d5b5; }
     div:has(> div.wc-getwild) .stButton > button {
         background: transparent !important;
         color: #ffffff !important;
@@ -1441,9 +1447,12 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
              if chosen_name in (p.get('displayName', {}).get('text') or '').lower()),
             raw_places[0]
         )
-        data['address']  = matched.get('formattedAddress') or ''
-        data['website']  = matched.get('websiteUri') or ''
-        data['photo_url'] = matched.get('photo_url')
+        data['address']              = matched.get('formattedAddress') or ''
+        data['website']              = matched.get('websiteUri') or ''
+        data['photo_url']            = matched.get('photo_url')
+        data['google_rating']        = matched.get('rating')
+        data['google_rating_count']  = matched.get('userRatingCount', 0)
+        data['google_opening_hours'] = matched.get('currentOpeningHours')
         data['vibe_check'] = ''
 
         if not isinstance(data.get('matched_tags'), list):
@@ -1458,6 +1467,48 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
         pass
     return None
 
+def _format_opening_hours(opening_hours):
+    """Returns a short display string like '🟢 Open · Closes 10 PM' or '🔴 Closed · Opens 5 PM'."""
+    if not opening_hours:
+        return ""
+    open_now = opening_hours.get('openNow')
+    if open_now is None:
+        return ""
+    from datetime import datetime
+    now = datetime.now()
+    api_day = (now.weekday() + 1) % 7  # Places API: 0=Sun,1=Mon,...,6=Sat
+    periods = opening_hours.get('periods', [])
+
+    def _fmt(h, m):
+        suffix = "AM" if h < 12 else "PM"
+        dh = h % 12 or 12
+        return f"{dh}:{m:02d} {suffix}" if m else f"{dh} {suffix}"
+
+    if open_now:
+        for p in periods:
+            if p.get('open', {}).get('day') == api_day:
+                cl = p.get('close', {})
+                ch = cl.get('hour')
+                if ch is not None:
+                    return f"🟢 Open · Closes {_fmt(ch, cl.get('minute', 0))}"
+        return "🟢 Open Now"
+    else:
+        for day_off in range(7):
+            check = (api_day + day_off) % 7
+            day_periods = sorted(
+                [p for p in periods if p.get('open', {}).get('day') == check],
+                key=lambda x: x.get('open', {}).get('hour', 0)
+            )
+            for p in day_periods:
+                op = p.get('open', {})
+                oh, om = op.get('hour', 0), op.get('minute', 0)
+                if day_off == 0 and (oh * 60 + om) <= (now.hour * 60 + now.minute):
+                    continue
+                prefix = "today " if day_off == 0 else "tomorrow " if day_off == 1 else ""
+                return f"🔴 Closed · Opens {prefix}{_fmt(oh, om)}"
+        return "🔴 Closed"
+
+
 def render_wild_idea_card(idea, location_input, user_id):
     """Renders the wild idea as a full result card, matching render_spot_card() layout."""
     name     = idea.get('name', 'Wild Idea')
@@ -1470,6 +1521,15 @@ def render_wild_idea_card(idea, location_input, user_id):
     tags     = idea.get('matched_tags', [])
 
     img_url = idea.get('photo_url') or get_fallback_image(category, why_now)
+    _g_rating  = idea.get('google_rating')
+    _g_count   = idea.get('google_rating_count') or 0
+    _g_hours   = idea.get('google_opening_hours')
+    rating_html = (
+        f'<div class="wc-rating">⭐ {_g_rating:.1f} <span class="wc-rating-count">({_g_count:,} reviews)</span></div>'
+        if _g_rating and _g_count and _g_count > 50 else ''
+    )
+    _hours_str  = _format_opening_hours(_g_hours)
+    hours_html  = f'<div class="wc-hours">{_hours_str}</div>' if _hours_str else ''
 
     # Tags
     tags_html = ''
@@ -1528,8 +1588,10 @@ def render_wild_idea_card(idea, location_input, user_id):
   </div>
   <div class="wc-body">
     <div class="wc-name">{emoji} {name}</div>
+    {rating_html}
     <div class="wc-meta">{category}</div>
     {vibe_pills_html}{addr_html}
+    {hours_html}
     {utility_html}
     <hr class="wc-hr">
     <p class="wc-pitch">{why_now}</p>
@@ -1914,8 +1976,7 @@ def match_photos_to_results(recommendations, raw_places, live_events=None, place
         if venue:
             event_images.setdefault(venue, img)  # title takes priority if both match
 
-    # Build Places photo lookup — use pre-built map if provided (no HEAD requests needed),
-    # otherwise build from raw_places with HEAD validation as fallback
+    # Build Places photo + meta lookup
     if places_photo_map is not None:
         place_photos = {k.lower().replace(' ', ''): v for k, v in places_photo_map.items() if v}
     else:
@@ -1931,12 +1992,28 @@ def match_photos_to_results(recommendations, raw_places, live_events=None, place
                 except:
                     pass
 
+    # Build meta lookup (rating, review count, hours) keyed by normalized name
+    place_meta = {}
+    for place in (raw_places or []):
+        name = place.get('displayName', {}).get('text', '').lower().replace(' ', '')
+        if name:
+            place_meta[name] = {
+                'google_rating':       place.get('rating'),
+                'google_rating_count': place.get('userRatingCount', 0),
+                'google_opening_hours': place.get('currentOpeningHours'),
+            }
+
+    def _apply_meta(rec, key):
+        if key in place_meta:
+            rec.update(place_meta[key])
+
     for rec in recommendations:
         rec_name = rec.get('name', '').lower().replace(' ', '')
 
         # 1. Exact event title / venue_name match
         if rec_name in event_images:
             rec['photo_url'] = event_images[rec_name]
+            _apply_meta(rec, rec_name)
             continue
 
         # 2. Partial event match (substring either direction)
@@ -1947,11 +2024,13 @@ def match_photos_to_results(recommendations, raw_places, live_events=None, place
                 ev_matched = True
                 break
         if ev_matched:
+            _apply_meta(rec, rec_name)
             continue
 
         # 3. Exact Places match
         if rec_name in place_photos:
             rec['photo_url'] = place_photos[rec_name]
+            _apply_meta(rec, rec_name)
             continue
 
         # 4. Partial Places match (substring either direction)
@@ -1959,6 +2038,7 @@ def match_photos_to_results(recommendations, raw_places, live_events=None, place
         for place_key, url in place_photos.items():
             if place_key in rec_name or rec_name in place_key:
                 rec['photo_url'] = url
+                _apply_meta(rec, place_key)
                 matched = True
                 break
         if not matched:
@@ -2064,6 +2144,15 @@ def render_spot_card(spot, location_input, user_id, index, mode):
     vibe       = spot.get('vibe_check', '')
     address    = spot.get('address', '')
     pitch      = spot.get('why_its_perfect', '')
+    _g_rating  = spot.get('google_rating')
+    _g_count   = spot.get('google_rating_count') or 0
+    _g_hours   = spot.get('google_opening_hours')
+    rating_html = (
+        f'<div class="wc-rating">⭐ {_g_rating:.1f} <span class="wc-rating-count">({_g_count:,} reviews)</span></div>'
+        if _g_rating and _g_count and _g_count > 50 else ''
+    )
+    _hours_str  = _format_opening_hours(_g_hours)
+    hours_html  = f'<div class="wc-hours">{_hours_str}</div>' if _hours_str else ''
     start_time = spot.get('start_time', '')
     venue_name = spot.get('venue_name', '')
 
@@ -2134,8 +2223,10 @@ def render_spot_card(spot, location_input, user_id, index, mode):
   </div>
   <div class="wc-body">
     <div class="wc-name">{title_prefix} {spot['name']}</div>
+    {rating_html}
     <div class="wc-meta">{category}</div>
     {vibe_pills_html}{event_time_html}<div class="wc-address">📍 {address}</div>
+    {hours_html}
     {utility_html}
     <hr class="wc-hr">
     <p class="wc-pitch">{pitch}</p>
