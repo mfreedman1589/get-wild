@@ -389,6 +389,17 @@ custom_css = """
         color: #ffffff !important;
         border: none !important;
     }
+    #gw-try-again + div .stButton > button {
+        font-size: 12px !important;
+        color: #4a7c5f !important;
+        background: transparent !important;
+        border: 1px solid #c8e6c9 !important;
+        border-radius: 20px !important;
+        padding: 4px 16px !important;
+    }
+    #gw-try-again + div .stButton > button:hover {
+        background: rgba(200, 230, 201, 0.15) !important;
+    }
 
 </style>
 """
@@ -2949,6 +2960,18 @@ else:
                         st.session_state.skip_cache = True
                         st.session_state.is_loading = True
                         st.rerun()
+
+                # --- TRY AGAIN BUTTON (ONLY IN GET WILD MODE) ---
+                elif mode == "get_wild":
+                    _ta_c1, _ta_c2, _ta_c3 = st.columns([1, 2, 1])
+                    with _ta_c2:
+                        st.markdown('<div id="gw-try-again"></div>', unsafe_allow_html=True)
+                        if st.button("🎲 Try Another Wild Pick", key="try_again_wild", use_container_width=True):
+                            st.session_state.skip_cache = True
+                            st.session_state.trigger_fetch = True
+                            st.session_state.is_loading = True
+                            st.session_state.current_results = None
+                            st.rerun()
 
     # ----------------------------------------
     # REWARDS TAB
