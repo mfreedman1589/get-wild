@@ -373,6 +373,16 @@ custom_css = """
         color: #ffffff !important;
         border: 1px solid #52b788 !important;
     }
+    .wc-getwild .wc-vibe-pill {
+        background: rgba(255,255,255,0.15) !important;
+        border: 1px solid rgba(255,255,255,0.3) !important;
+        color: #ffffff !important;
+    }
+    #gw-fb-submit + div .stButton > button {
+        background: #2d6a4f !important;
+        color: #ffffff !important;
+        border: none !important;
+    }
 
 </style>
 """
@@ -1556,6 +1566,7 @@ def render_wild_idea_card(idea, location_input, user_id):
                 st.rerun()
         with col3:
             if st.button("✕ Not for me", key=f"wi_nope_{_key}", use_container_width=True):
+                save_spot_to_db(user_id, name, address, category, notes="rejected_wild_idea")
                 _dismiss_wild_idea(user_id)
                 st.rerun()
 
@@ -1846,7 +1857,7 @@ RULES:
 
 {'' if mode == 'get_wild' else 'FALLBACK: If strict rules leave fewer than 3 valid options, relax non-critical preferences (variety, price matching, hours) to ensure exactly 3 recommendations are always returned. It is always better to return 3 slightly imperfect results than 1 perfect result. Never return fewer than 3.'}
 
-Return JSON with a 'recommendations' array. Each item: name, tier_name, category, address (exact), why_its_perfect (2-3 sentences), vibe_check (3 words), matched_tags (2-3 strings; mandatory if specific given), website, lat, lng, spontaneity_score (integer 1-10 using this strict rubric — DO NOT inflate scores: 1-2=mainstream chain or famous landmark everyone knows (Smithsonian, Cheesecake Factory, Central Park); 3-4=solid local spot most people have heard of or would immediately think to Google (neighborhood brewery, popular brunch spot, well-known hiking trail); 5-6=genuinely interesting find that most people wouldn't think of themselves but is easy to enjoy (rooftop bar with no reservations needed, lesser-known gallery, unique food hall); 7-8=surprisingly unconventional or hard-to-discover — requires insider knowledge or creative thinking (hidden speakeasy, axe throwing bar, ceramics class, underground supper club); 9-10=truly rare, unexpected, or brand-new — most locals haven't heard of it yet (pop-up experience, brand-new venue in soft opening, extremely niche activity). A small local museum scores 3-4. A neighborhood park scores 2-3. A bowling alley scores 5. Axe throwing scores 7. A brand-new pop-up art installation scores 9.)"""
+Return JSON with a 'recommendations' array. Each item: name, tier_name, category, address (exact), why_its_perfect (2-3 sentences), vibe_check (3 words), matched_tags (2-3 short descriptor strings, always required — e.g. "cozy", "date night", "craft cocktails"; if a specific keyword was given it MUST appear in matched_tags), website, lat, lng, spontaneity_score (integer 1-10 using this strict rubric — DO NOT inflate scores: 1-2=mainstream chain or famous landmark everyone knows (Smithsonian, Cheesecake Factory, Central Park); 3-4=solid local spot most people have heard of or would immediately think to Google (neighborhood brewery, popular brunch spot, well-known hiking trail); 5-6=genuinely interesting find that most people wouldn't think of themselves but is easy to enjoy (rooftop bar with no reservations needed, lesser-known gallery, unique food hall); 7-8=surprisingly unconventional or hard-to-discover — requires insider knowledge or creative thinking (hidden speakeasy, axe throwing bar, ceramics class, underground supper club); 9-10=truly rare, unexpected, or brand-new — most locals haven't heard of it yet (pop-up experience, brand-new venue in soft opening, extremely niche activity). A small local museum scores 3-4. A neighborhood park scores 2-3. A bowling alley scores 5. Axe throwing scores 7. A brand-new pop-up art installation scores 9.)"""
 
     try:
         response = client.chat.completions.create(
@@ -2266,6 +2277,7 @@ if st.session_state.show_feedback_form:
         st.text_area("", placeholder="Type here...", label_visibility="collapsed", key="fb_textarea")
         _fb_c1, _fb_c2 = st.columns([3, 1])
         with _fb_c1:
+            st.markdown('<div id="gw-fb-submit"></div>', unsafe_allow_html=True)
             if st.button("Send Feedback", type="primary", use_container_width=True, key="fb_submit"):
                 _fb_comment = st.session_state.get("fb_textarea", "")
                 if not _fb_comment.strip():
@@ -2586,7 +2598,7 @@ else:
             )
             show_keyword = kw_expanded is not None
             if show_keyword:
-                ui_spec = st.text_input("Keyword", value=st.session_state.mem_spec, placeholder="e.g., 'romantic', 'live jazz', 'axe throwing'", label_visibility="collapsed")
+                ui_spec = st.text_input("Keyword", value=st.session_state.mem_spec, placeholder="e.g., 'romantic', 'live jazz', 'axe throwing'", label_visibility="collapsed", key="spec_kw_input")
             else:
                 ui_spec = st.session_state.mem_spec
 
