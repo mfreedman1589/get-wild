@@ -1390,6 +1390,13 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
 
         # Filter out already-saved spots (case-insensitive)
         _excl_lower = {n.lower() for n in (excluded_spots or ())}
+        # Always explicitly exclude rejected wild ideas directly from DB
+        try:
+            _rej = supabase.table('saved_spots').select('spot_name').eq('user_id', user_id_str).eq('notes', 'rejected_wild_idea').execute()
+            for _r in (_rej.data or []):
+                _excl_lower.add((_r.get('spot_name') or '').lower())
+        except:
+            pass
         if _excl_lower:
             raw_places = [
                 p for p in raw_places
@@ -1575,9 +1582,22 @@ def render_wild_idea_card(idea, location_input, user_id):
     map_url        = f"https://www.google.com/maps/search/?api=1&query={search_q}"
     encoded_addr   = urllib.parse.quote(address) if address else ''
     uber_url       = f"https://m.uber.com/ul/?action=setPickup&pickup=my_location&dropoff[formatted_address]={encoded_addr}"
-    share_text     = f"Let's go to {name}! {address}\n{map_url}"
+    _first_sentence = (why_now.split('.')[0].strip() + '.') if why_now else ''
+    _vibe_str = ' · '.join(_vibe_words) if _vibe_words else ''
+    _share_meta = f"{category}" + (f" · {_vibe_str}" if _vibe_str else "")
+    _share_lines = [
+        f"🌿 Get Wild pick: {name}",
+        _share_meta,
+        _first_sentence,
+        f"📍 {address}",
+        f"🗺️ {map_url}",
+    ]
+    if website:
+        _share_lines.append(f"🌐 {website}")
+    _share_lines.append("Found on Get Wild → getwild.streamlit.app")
+    share_text     = '\n'.join(line for line in _share_lines if line)
     share_encoded  = urllib.parse.quote(share_text)
-    share_subj_enc = urllib.parse.quote(f"Wild Plan: {name}")
+    share_subj_enc = urllib.parse.quote(f"🌿 Get Wild pick: {name}")
     share_body_enc = urllib.parse.quote(share_text)
     sep = '<span class="wc-util-sep">|</span>'
     website_part = f'<a href="{website}" target="_blank" class="wc-util-link">🌐 Website</a>{sep}' if website else ''
@@ -2206,9 +2226,22 @@ def render_spot_card(spot, location_input, user_id, index, mode):
         event_time_html = f'<div class="wc-meta" style="margin-bottom:8px;">{time_line}</div>'
 
     # Utility row links — "Get Tickets" for events, "Website" for places
-    share_text     = f"Let's go to {spot['name']}! {address}\n{map_url}"
+    _first_sentence = (pitch.split('.')[0].strip() + '.') if pitch else ''
+    _vibe_str = ' · '.join(_vibe_words) if _vibe_words else ''
+    _share_meta = f"{category}" + (f" · {_vibe_str}" if _vibe_str else "")
+    _share_lines = [
+        f"🌿 Get Wild pick: {spot['name']}",
+        _share_meta,
+        _first_sentence,
+        f"📍 {address}",
+        f"🗺️ {map_url}",
+    ]
+    if spot.get('website'):
+        _share_lines.append(f"🌐 {spot['website']}")
+    _share_lines.append("Found on Get Wild → getwild.streamlit.app")
+    share_text     = '\n'.join(line for line in _share_lines if line)
     share_encoded  = urllib.parse.quote(share_text)
-    share_subj_enc = urllib.parse.quote(f"Wild Plan: {spot['name']}")
+    share_subj_enc = urllib.parse.quote(f"🌿 Get Wild pick: {spot['name']}")
     share_body_enc = urllib.parse.quote(share_text)
     sep = '<span class="wc-util-sep">|</span>'
     if spot.get('website'):
