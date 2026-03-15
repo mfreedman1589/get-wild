@@ -400,6 +400,12 @@ custom_css = """
     #gw-try-again + div .stButton > button:hover {
         background: rgba(200, 230, 201, 0.15) !important;
     }
+    .wc-picked-for-you { font-size: 0.72rem; color: #52b788; margin: 2px 0 4px 0; }
+    .gw-dna-pill {
+        display: inline-block; background: #e8f5e9; color: #2e7d32;
+        border-radius: 20px; padding: 3px 10px; font-size: 0.78rem;
+        font-weight: 500; margin: 2px 3px 2px 0;
+    }
 
 </style>
 """
@@ -437,6 +443,8 @@ if 'show_welcome_bonus' not in st.session_state: st.session_state.show_welcome_b
 if 'badges_backfilled' not in st.session_state: st.session_state.badges_backfilled = False
 if 'is_loading' not in st.session_state: st.session_state.is_loading = False
 if 'show_feedback_form' not in st.session_state: st.session_state.show_feedback_form = False
+if 'mem_outdoor_vibe' not in st.session_state: st.session_state.mem_outdoor_vibe = None
+if 'pref_scores' not in st.session_state: st.session_state.pref_scores = None
 if 'show_keyword' not in st.session_state: st.session_state.show_keyword = False
 if 'referral_code' not in st.session_state:
     st.session_state.referral_code = st.query_params.get("ref", "")
@@ -1102,12 +1110,13 @@ def build_tier_queries(filters_dict, profile=None, preference_scores=None):
       - tier2: fresh, interesting picks (new, trending, unique)
       - tier3: hidden gems (unconventional, lesser-known, quirky)
     """
-    vibe    = filters_dict.get('vibe', "Doesn't Matter")
-    food    = filters_dict.get('food', 'Full Meal')
-    group   = filters_dict.get('group', '')
-    spend   = filters_dict.get('spend', '💰 Moderate')
-    specific = (filters_dict.get('specific') or '').strip()
-    is_free  = (spend == "🆓 Free")
+    vibe         = filters_dict.get('vibe', "Doesn't Matter")
+    food         = filters_dict.get('food', 'Full Meal')
+    group        = filters_dict.get('group', '')
+    spend        = filters_dict.get('spend', '💰 Moderate')
+    specific     = (filters_dict.get('specific') or '').strip()
+    outdoor_vibe = filters_dict.get('outdoor_vibe')  # Adventure | Nature | Outdoor Dining | None
+    is_free      = (spend == "🆓 Free")
 
     _gm = {"Date": "intimate romantic", "Family Outing": "family friendly kid-friendly",
            "Friends": "lively group social", "Solo": "solo-friendly"}.get(group, "")
@@ -1153,6 +1162,12 @@ def build_tier_queries(filters_dict, profile=None, preference_scores=None):
     # Just Drinks/Coffee
     if food == "Just Drinks/Coffee":
         if vibe == "Outside":
+            if outdoor_vibe == "Outdoor Dining":
+                return (
+                    f"popular outdoor bar beer garden patio restaurant {_gm}".strip(),
+                    f"rooftop bar outdoor dining unique patio cocktails {_gm}".strip(),
+                    f"hidden outdoor dining patio local craft drinks {_gm}".strip(),
+                )
             return (
                 f"popular outdoor bar beer garden brewery patio {_gm}".strip(),
                 f"rooftop bar unique outdoor cocktails wine bar {_gm}".strip(),
@@ -1173,6 +1188,24 @@ def build_tier_queries(filters_dict, profile=None, preference_scores=None):
 
     # No Food Needed
     if vibe == "Outside":
+        if outdoor_vibe == "Adventure":
+            return (
+                f"popular park hiking trail outdoor sports climbing kayaking {_gm}".strip(),
+                f"unique adventure activity rock climbing kayaking zip-line sports complex {_gm}".strip(),
+                f"hidden trail waterfall secret outdoor adventure off the beaten path {_gm}".strip(),
+            )
+        elif outdoor_vibe == "Nature":
+            return (
+                f"popular park botanical garden nature preserve scenic overlook {_gm}".strip(),
+                f"unique botanical garden arboretum wildlife sanctuary scenic viewpoint {_gm}".strip(),
+                f"hidden nature trail waterfall secret garden local nature gem {_gm}".strip(),
+            )
+        elif outdoor_vibe == "Outdoor Dining":
+            return (
+                f"popular outdoor dining patio restaurant beer garden {_gm}".strip(),
+                f"rooftop restaurant outdoor dining unique patio farm to table {_gm}".strip(),
+                f"hidden outdoor dining patio local gem secret garden restaurant {_gm}".strip(),
+            )
         return (
             f"popular park hiking trail nature preserve outdoor recreation {_gm}".strip(),
             f"unique outdoor activity botanical garden scenic overlook kayaking {_gm}".strip(),
@@ -1659,6 +1692,7 @@ def render_wild_idea_card(idea, location_input, user_id):
                 st.rerun()
         with col3:
             if st.button("✕ Not for me", key=f"wi_nope_{_key}", use_container_width=True):
+                st.toast("Got it — we'll skip places like this 👎")
                 save_spot_to_db(user_id, name, address, category, notes="rejected_wild_idea")
                 _dismiss_wild_idea(user_id)
                 st.rerun()
@@ -1872,6 +1906,10 @@ def get_ai_recommendations(places_data, live_events_data, weather_report, filter
         "- Avoid recommending well-known chains or tourist spots for this tier — if it has 500+ reviews it is NOT a hidden gem"
     )
 
+    outdoor_vibe_rule = ""
+    if filters_dict.get('outdoor_vibe') and filters_dict.get('vibe') == "Outside":
+        outdoor_vibe_rule = f"OUTDOOR VIBE: User wants a '{filters_dict['outdoor_vibe']}' outdoor experience — prioritize venues that match this style accordingly."
+
     specific_rule = ""
     if filters_dict.get('specific'):
         _spec = filters_dict['specific']
@@ -1944,7 +1982,7 @@ RULES:
 11. {hidden_gem_mandate}
 12. FRESHNESS BONUS: Any venue tagged just_opened=True in the input data is a priority pick for the TIER 3 (Hidden Gem) or TIER 2 (Fresh Take) recommendation — these are rare finds. Always include one if available.
 13. TRAIL DATA: Some results may be tagged source=alltrails. These are real verified trails with difficulty ratings and length. For outdoor/active searches, strongly consider including one trail as the Adventure or Hidden Gem tier pick.
-{specific_rule}
+{f"14. {outdoor_vibe_rule}" if outdoor_vibe_rule else ""}{specific_rule}
 
 {instruction}
 
@@ -2135,7 +2173,7 @@ def get_fallback_image(category, text=""):
     return "https://images.unsplash.com/photo-1514214246283-d427a95c5d2f?w=800&q=80"
 
 
-def render_spot_card(spot, location_input, user_id, index, mode):
+def render_spot_card(spot, location_input, user_id, index, mode, preference_scores=None):
     title_prefix = f"{index}." if mode == "top_3" else "🎲"
 
     search_term = spot['name'].replace(' ', '+') + f"+{location_input.replace(' ', '+')}"
@@ -2186,6 +2224,21 @@ def render_spot_card(spot, location_input, user_id, index, mode):
     hours_html  = f'<div class="wc-hours">{_hours_str}</div>' if _hours_str else ''
     start_time = spot.get('start_time', '')
     venue_name = spot.get('venue_name', '')
+
+    # "Picked for you" — only shown when preference keywords match this spot
+    picked_html = ''
+    if preference_scores:
+        _top_kws = {kw.lower() for kw in (preference_scores.get('top_keywords') or [])}
+        if _top_kws:
+            _raw_tags = spot.get('matched_tags') or []
+            if isinstance(_raw_tags, str):
+                _raw_tags = [t.strip() for t in _raw_tags.split(',') if t.strip()]
+            elif isinstance(_raw_tags, dict):
+                _raw_tags = [v for v in _raw_tags.values() if isinstance(v, str)]
+            _spot_tokens = {t.lower() for t in _raw_tags}
+            _spot_tokens |= {w for w in (category or '').lower().split()}
+            if _top_kws & _spot_tokens:
+                picked_html = '<div class="wc-picked-for-you">✨ Picked for you</div>'
 
     # Tier badge left-border color by pool membership
     _tn = tier_name.lower()
@@ -2268,6 +2321,7 @@ def render_spot_card(spot, location_input, user_id, index, mode):
   <div class="wc-body">
     <div class="wc-name">{title_prefix} {spot['name']}</div>
     {rating_html}
+    {picked_html}
     <div class="wc-meta">{category}</div>
     {vibe_pills_html}{event_time_html}<div class="wc-address">📍 {address}</div>
     {hours_html}
@@ -2302,6 +2356,7 @@ def render_spot_card(spot, location_input, user_id, index, mode):
                 check_and_award_badges(user_id)
         with col3:
             if st.button("👎 Not for me", key=f"nope_{index}_{spot['name']}", use_container_width=True, help="Never suggest this again"):
+                st.toast("Got it — we'll skip places like this 👎")
                 save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'),
                                 rating=1, notes="Blacklisted via quick-button.", **_ctx)
 
@@ -2713,6 +2768,15 @@ else:
             ui_vibe_d = _seg("🌍 Setting?", _VIBE_OPTS, _INT_TO_VIBE.get(st.session_state.mem_vibe, "✨ Anywhere"), "seg_vibe")
             ui_vibe   = _VIBE_TO_INT.get(ui_vibe_d, "Doesn't Matter")
 
+            # Row 3b: Outdoor Vibe (only visible when Outside is selected)
+            _OUTDOOR_VIBE_OPTS = ["🥾 Adventure", "🌳 Nature", "🍻 Outdoor Dining"]
+            _OUTDOOR_VIBE_MAP  = {"🥾 Adventure": "Adventure", "🌳 Nature": "Nature", "🍻 Outdoor Dining": "Outdoor Dining"}
+            if ui_vibe == "Outside":
+                _ov_d = st.segmented_control("🌲 Outside Vibe?", _OUTDOOR_VIBE_OPTS, default=None, key="seg_outdoor_vibe")
+                ui_outdoor_vibe = _OUTDOOR_VIBE_MAP.get(_ov_d)
+            else:
+                ui_outdoor_vibe = None
+
             # Row 4: Food
             ui_food_d = _seg("🍽️ Food?", _FOOD_OPTS, _INT_TO_FOOD.get(st.session_state.mem_food, "🍽️ Full Meal"), "seg_food")
             ui_food   = _FOOD_TO_INT.get(ui_food_d, "Full Meal")
@@ -2720,8 +2784,10 @@ else:
             # Row 5: Budget
             ui_spend = _seg("💸 Budget?", _SPEND_OPTS, st.session_state.mem_spend, "seg_spend")
 
-            # Row 6: Distance
-            ui_dist = st.slider("📍 Max Distance (Miles)", 1, 20, st.session_state.mem_dist)
+            # Row 6: Distance (extends to 50 mi for Outside searches)
+            _dist_max = 50 if ui_vibe == "Outside" else 25
+            _dist_val = min(st.session_state.mem_dist, _dist_max)
+            ui_dist = st.slider("📍 Max Distance (Miles)", 1, _dist_max, _dist_val)
 
             # Row 7: Specific keyword (optional)
             st.markdown('<div style="margin-top:16px;"></div>', unsafe_allow_html=True)
@@ -2761,12 +2827,14 @@ else:
                     st.session_state.mem_dist = ui_dist
                     st.session_state.mem_spec = ui_spec
                     st.session_state.mem_spend = ui_spend
+                    st.session_state.mem_outdoor_vibe = ui_outdoor_vibe
 
                     st.session_state.current_mode = "get_wild" if get_wild_clicked else "top_3"
                     st.session_state.filters_dict = {
                         "group": ui_group, "time": intended_time,
                         "vibe": ui_vibe, "food": ui_food,
-                        "specific": ui_spec, "spend": ui_spend
+                        "specific": ui_spec, "spend": ui_spend,
+                        "outdoor_vibe": ui_outdoor_vibe,
                     }
                     st.session_state.search_active = True
                     st.session_state.trigger_fetch = True
@@ -2833,6 +2901,7 @@ else:
                             import nest_asyncio
                             nest_asyncio.apply()
                             weather_report, raw_places, live_events_data, db_excluded, user_favorites, pref_scores, trail_results = asyncio.run(_run_gather())
+                        st.session_state.pref_scores = pref_scores
                         # Merge trail results — add to tier1 if tiered, else append to flat list
                         if trail_results:
                             if isinstance(raw_places, dict):
@@ -2983,7 +3052,7 @@ else:
                 
                 # --- RENDER CARDS ---
                 for index, spot in enumerate(results.get("recommendations", [])):
-                    render_spot_card(spot, st.session_state.mem_loc, st.session_state.user.id, index + 1, mode)
+                    render_spot_card(spot, st.session_state.mem_loc, st.session_state.user.id, index + 1, mode, preference_scores=st.session_state.get('pref_scores'))
                     
                 # --- SHUFFLE BUTTON (ONLY IN TOP 3 MODE) ---
                 if mode == "top_3":
@@ -3211,6 +3280,24 @@ else:
         )
 
         st.write("---")
+
+        # ── WILD DNA ────────────────────────────────────────────────────────
+        st.subheader("🧬 Your Wild DNA")
+        st.caption("What we've learned from your explorations")
+        _dna_scores = get_user_preference_scores(_uid_p)
+        _dna_kws    = _dna_scores.get('top_keywords') or []
+        _dna_avoid  = _dna_scores.get('avoid_keywords') or []
+        if _dna_kws or _dna_avoid:
+            if _dna_kws:
+                _pills = "".join(f'<span class="gw-dna-pill">{kw}</span>' for kw in _dna_kws)
+                st.markdown(f'<div style="margin-bottom:6px;">✨ You love: {_pills}</div>', unsafe_allow_html=True)
+            if _dna_avoid:
+                _pills = "".join(f'<span class="gw-dna-pill" style="background:#fce4ec;color:#b71c1c;">{kw}</span>' for kw in _dna_avoid)
+                st.markdown(f'<div style="margin-bottom:6px;">👎 You tend to skip: {_pills}</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<p style="color:#9ca3af;font-size:0.88rem;">Keep exploring — we\'re learning your vibe 🌿</p>', unsafe_allow_html=True)
+        st.markdown('<div style="margin:16px 0;border-top:1px solid #e0ece4;"></div>', unsafe_allow_html=True)
+
         st.subheader("Personalize Your Profile")
         st.write("Set your baseline preferences so the app learns how you like to explore.")
 
