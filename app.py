@@ -505,12 +505,20 @@ def get_user_preference_scores(user_id):
         "comedy", "sports", "restaurant", "jazz", "cocktail", "theater", "brunch",
     ]
     try:
-        res = supabase.table('saved_spots').select('spot_name, category, rating').eq('user_id', user_id).execute()
+        res = supabase.table('saved_spots').select('spot_name, category, rating, mode, user_notes').eq('user_id', user_id).execute()
         spots = res.data or []
         if not spots:
             return {}
 
-        # Category scoring: count * avg_rating for rated>=4 spots
+        total_spots = len(spots)
+        # Dynamic threshold: grows with data volume
+        if total_spots <= 5:
+            _kw_threshold = 1
+        elif total_spots <= 15:
+            _kw_threshold = 2
+        else:
+            _kw_threshold = 3
+
         from collections import defaultdict
         cat_ratings = defaultdict(list)
         kw_counts = defaultdict(int)
@@ -518,21 +526,32 @@ def get_user_preference_scores(user_id):
 
         for spot in spots:
             rating = spot.get('rating') or 0
+            mode = (spot.get('mode') or '').strip().lower()
+            user_notes = (spot.get('user_notes') or '').strip().lower()
             cat = (spot.get('category') or '').strip()
             name = (spot.get('spot_name') or '').lower()
             cat_lower = cat.lower()
             combined = name + ' ' + cat_lower
 
-            if rating >= 4:
+            # Positive signal: rated 4+ OR saved/going (even without a rating)
+            is_positive = rating >= 4 or mode in ('save', 'going')
+            # Negative signal: rated 1 OR explicitly rejected
+            is_negative = rating == 1 or mode == 'not_for_me' or 'rejected' in user_notes
+
+            if is_positive and not is_negative:
                 if cat:
-                    cat_ratings[cat].append(rating)
+                    cat_ratings[cat].append(max(rating, 3))  # floor unrated saves at 3
                 for kw in _TASTE_KEYWORDS:
                     if kw in combined:
                         kw_counts[kw] += 1
-            elif rating == 1:
+            elif is_negative:
                 for kw in _TASTE_KEYWORDS:
                     if kw in combined:
                         avoid_kw_counts[kw] += 1
+
+        print(f"[WildDNA] user={user_id} total_spots={total_spots} threshold={_kw_threshold}")
+        print(f"[WildDNA] kw_counts={dict(kw_counts)}")
+        print(f"[WildDNA] avoid_kw_counts={dict(avoid_kw_counts)}")
 
         # Score = count * avg_rating per category
         cat_scores = {
@@ -541,8 +560,10 @@ def get_user_preference_scores(user_id):
         }
         top_categories = sorted(cat_scores, key=cat_scores.get, reverse=True)[:3]
         top_keywords = sorted(kw_counts, key=kw_counts.get, reverse=True)[:5]
-        top_keywords = [kw for kw in top_keywords if kw_counts[kw] >= 2]  # min 2 mentions
-        avoid_keywords = [kw for kw in avoid_kw_counts if avoid_kw_counts[kw] >= 2]
+        top_keywords = [kw for kw in top_keywords if kw_counts[kw] >= _kw_threshold]
+        avoid_keywords = [kw for kw in avoid_kw_counts if avoid_kw_counts[kw] >= _kw_threshold]
+
+        print(f"[WildDNA] top_keywords={top_keywords} avoid_keywords={avoid_keywords}")
 
         return {
             "top_categories": top_categories,
@@ -550,7 +571,8 @@ def get_user_preference_scores(user_id):
             "avoid_keywords": avoid_keywords,
             "rated_count": len([s for s in spots if (s.get('rating') or 0) >= 4]),
         }
-    except:
+    except Exception as _e:
+        print(f"[WildDNA] error: {_e}")
         return {}
 
 def save_spot_to_db(user_id, name, address, category, rating=None, notes="",
