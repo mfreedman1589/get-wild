@@ -504,8 +504,9 @@ def get_user_preference_scores(user_id):
         "wine", "brewery", "bar", "coffee", "museum", "outdoor", "music",
         "comedy", "sports", "restaurant", "jazz", "cocktail", "theater", "brunch",
     ]
+    _STOP_WORDS = {'the', 'a', 'an', 'and', 'or', 'of', 'in', 'at', 'to', 'for', 'by', 'with', 'on', '&'}
     try:
-        res = supabase.table('saved_spots').select('spot_name, category, rating, mode, user_notes').eq('user_id', user_id).execute()
+        res = supabase.table('saved_spots').select('spot_name, category, rating, mode, user_notes, matched_tags').eq('user_id', user_id).execute()
         spots = res.data or []
         if not spots:
             return {}
@@ -533,6 +534,16 @@ def get_user_preference_scores(user_id):
             cat_lower = cat.lower()
             combined = name + ' ' + cat_lower
 
+            # Parse matched_tags saved as comma-separated string
+            _db_tags_str = (spot.get('matched_tags') or '').lower()
+            _db_tags = [t.strip() for t in _db_tags_str.split(',') if t.strip() and len(t.strip()) > 2]
+
+            # Category words (e.g. "Fine Dining" → ["fine", "dining"])
+            _cat_words = [
+                w.strip('&,.-') for w in cat_lower.split()
+                if w.strip('&,.-') and w.strip('&,.-') not in _STOP_WORDS and len(w.strip('&,.-')) > 2
+            ]
+
             # Positive signal: rated 4+ OR saved/going (even without a rating)
             is_positive = rating >= 4 or mode in ('save', 'going')
             # Negative signal: rated 1 OR explicitly rejected
@@ -544,10 +555,18 @@ def get_user_preference_scores(user_id):
                 for kw in _TASTE_KEYWORDS:
                     if kw in combined:
                         kw_counts[kw] += 1
+                for word in _cat_words:
+                    kw_counts[word] += 1
+                for tag in _db_tags:
+                    kw_counts[tag] += 1
             elif is_negative:
                 for kw in _TASTE_KEYWORDS:
                     if kw in combined:
                         avoid_kw_counts[kw] += 1
+                for word in _cat_words:
+                    avoid_kw_counts[word] += 1
+                for tag in _db_tags:
+                    avoid_kw_counts[tag] += 1
 
         print(f"[WildDNA] user={user_id} total_spots={total_spots} threshold={_kw_threshold}")
         print(f"[WildDNA] kw_counts={dict(kw_counts)}")
@@ -576,7 +595,8 @@ def get_user_preference_scores(user_id):
         return {}
 
 def save_spot_to_db(user_id, name, address, category, rating=None, notes="",
-                    mode="", group_type="", setting="", spend="", tier_name=""):
+                    mode="", group_type="", setting="", spend="", tier_name="",
+                    matched_tags=""):
     """Save a spot. Returns pre-save row count (0 = first save ever). Returns -1 on error."""
     try:
         pre_count = 0
@@ -587,18 +607,19 @@ def save_spot_to_db(user_id, name, address, category, rating=None, notes="",
             pass
 
         supabase.table('saved_spots').insert({
-            'user_id':    user_id,
-            'spot_name':  name,
-            'address':    address,
-            'category':   category,
-            'rating':     rating,
-            'user_notes': notes,
-            'saved_at':   datetime.utcnow().isoformat(),
-            'mode':       mode or '',
-            'group_type': group_type or '',
-            'setting':    setting or '',
-            'spend':      spend or '',
-            'tier_name':  tier_name or '',
+            'user_id':      user_id,
+            'spot_name':    name,
+            'address':      address,
+            'category':     category,
+            'rating':       rating,
+            'user_notes':   notes,
+            'saved_at':     datetime.utcnow().isoformat(),
+            'mode':         mode or '',
+            'group_type':   group_type or '',
+            'setting':      setting or '',
+            'spend':        spend or '',
+            'tier_name':    tier_name or '',
+            'matched_tags': matched_tags or '',
         }).execute()
 
         if rating != 1:
@@ -1696,6 +1717,7 @@ def render_wild_idea_card(idea, location_input, user_id):
             setting=st.session_state.get('mem_vibe', ''),
             spend=st.session_state.get('mem_spend', ''),
             tier_name='Wild Idea',
+            matched_tags=','.join(str(t) for t in tags if isinstance(t, str) and t),
         )
         with col1:
             if st.button("⭐ Save for Later", key=f"wi_save_{_key}", use_container_width=True):
@@ -2358,12 +2380,20 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
     with st.container(border=True):
         st.markdown(html_card, unsafe_allow_html=True)
         col1, col2, col3 = st.columns(3)
+        _raw_mt = spot.get('matched_tags') or []
+        if isinstance(_raw_mt, list):
+            _mt_str = ','.join(str(t) for t in _raw_mt if t)
+        elif isinstance(_raw_mt, dict):
+            _mt_str = ','.join(str(v) for v in _raw_mt.values() if isinstance(v, str))
+        else:
+            _mt_str = str(_raw_mt)
         _ctx = dict(
             mode=mode,
             group_type=st.session_state.get('mem_group', ''),
             setting=st.session_state.get('mem_vibe', ''),
             spend=st.session_state.get('mem_spend', ''),
             tier_name=spot.get('tier_name', ''),
+            matched_tags=_mt_str,
         )
         with col1:
             if st.button("⭐ Save", key=f"save_{index}_{spot['name']}", use_container_width=True, help="Save for later"):
