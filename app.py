@@ -1735,11 +1735,9 @@ def render_wild_idea_card(idea, location_input, user_id):
     _wi_res_url = idea.get('reservations_url') or ''
     if not _wi_res_url and _wi_is_dining:
         _wi_res_url = f"https://www.google.com/search?q={urllib.parse.quote(name + ' reservations')}"
-    wi_reserve_part = f'<a href="{_wi_res_url}" target="_blank" class="wc-util-link">📅 Reserve</a>{sep}' if _wi_res_url else ''
     utility_html = (
         f'<div class="wc-utility">'
         f'{website_part}'
-        f'{wi_reserve_part}'
         f'<a href="{map_url}" target="_blank" class="wc-util-link">🗺️ Directions</a>{sep}'
         f'<a href="{uber_url}" target="_blank" class="wc-util-link">🚗 Uber</a>{sep}'
         f'<a href="sms:?body={share_encoded}" class="wc-util-link">📱 Text</a>{sep}'
@@ -1802,12 +1800,6 @@ def render_wild_idea_card(idea, location_input, user_id):
                 save_spot_to_db(user_id, name, address, category, notes="rejected_wild_idea")
                 _dismiss_wild_idea(user_id)
                 st.rerun()
-        if st.button("📤 Share", key=f"wi_share_{_key}", use_container_width=True):
-            award_points(user_id, 'share', POINTS['share'], 'Shared a spot 📤')
-            st.toast("Shared! +2 pts 📤")
-            _wi_share_js = json.dumps(share_text)
-            components.html(f"""<script>(function(){{var t={_wi_share_js};if(navigator.share){{navigator.share({{title:'Get Wild pick',text:t}}).catch(function(){{}});}}else if(navigator.clipboard){{navigator.clipboard.writeText(t).catch(function(){{}});}}}})();</script>""", height=0)
-
     st.markdown(
         '<p style="text-align:center;color:#9ca3af;font-size:0.78rem;margin-top:2px;">'
         '✨ Check back — ideas get better as you get more wild</p>',
@@ -2472,11 +2464,9 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
     _res_url = spot.get('reservations_url') or ''
     if not _res_url and _is_dining:
         _res_url = f"https://www.google.com/search?q={urllib.parse.quote(spot['name'] + ' reservations')}"
-    reserve_part = f'<a href="{_res_url}" target="_blank" class="wc-util-link">📅 Reserve</a>{sep}' if _res_url else ''
     utility_html = (
         f'<div class="wc-utility">'
         f'{website_part}'
-        f'{reserve_part}'
         f'<a href="{map_url}" target="_blank" class="wc-util-link">🗺️ Directions</a>{sep}'
         f'<a href="{uber_url}" target="_blank" class="wc-util-link">🚗 Uber</a>{sep}'
         f'<a href="sms:?body={share_encoded}" class="wc-util-link">📱 Text</a>{sep}'
@@ -2542,12 +2532,6 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
                 st.toast("Got it — we'll skip places like this 👎")
                 save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'),
                                 rating=1, notes="Blacklisted via quick-button.", **_ctx)
-        if st.button("📤 Share", key=f"share_{index}_{spot['name'][:12]}", use_container_width=True):
-            award_points(user_id, 'share', POINTS['share'], 'Shared a spot 📤')
-            st.toast("Shared! +2 pts 📤")
-            _share_js = json.dumps(share_text)
-            components.html(f"""<script>(function(){{var t={_share_js};if(navigator.share){{navigator.share({{title:'Get Wild pick',text:t}}).catch(function(){{}});}}else if(navigator.clipboard){{navigator.clipboard.writeText(t).catch(function(){{}});}}}})();</script>""", height=0)
-
 def fetch_alltrails_trails(lat, lng, radius_miles, difficulty=None):
     """Fetch trails from AllTrails API. Returns [] if key not configured."""
     if not ALLTRAILS_API_KEY:
