@@ -58,6 +58,7 @@ POINTS = {
     'invite_sent':      10,
     'friend_activated': 15,
     'wild_idea':         3,
+    'share':             2,
 }
 
 BADGES = [
@@ -1801,6 +1802,11 @@ def render_wild_idea_card(idea, location_input, user_id):
                 save_spot_to_db(user_id, name, address, category, notes="rejected_wild_idea")
                 _dismiss_wild_idea(user_id)
                 st.rerun()
+        if st.button("📤 Share", key=f"wi_share_{_key}", use_container_width=True):
+            award_points(user_id, 'share', POINTS['share'], 'Shared a spot 📤')
+            st.toast("Shared! +2 pts 📤")
+            _wi_share_js = json.dumps(share_text)
+            components.html(f"""<script>(function(){{var t={_wi_share_js};if(navigator.share){{navigator.share({{title:'Get Wild pick',text:t}}).catch(function(){{}});}}else if(navigator.clipboard){{navigator.clipboard.writeText(t).catch(function(){{}});}}}})();</script>""", height=0)
 
     st.markdown(
         '<p style="text-align:center;color:#9ca3af;font-size:0.78rem;margin-top:2px;">'
@@ -2536,6 +2542,11 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
                 st.toast("Got it — we'll skip places like this 👎")
                 save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'),
                                 rating=1, notes="Blacklisted via quick-button.", **_ctx)
+        if st.button("📤 Share", key=f"share_{index}_{spot['name'][:12]}", use_container_width=True):
+            award_points(user_id, 'share', POINTS['share'], 'Shared a spot 📤')
+            st.toast("Shared! +2 pts 📤")
+            _share_js = json.dumps(share_text)
+            components.html(f"""<script>(function(){{var t={_share_js};if(navigator.share){{navigator.share({{title:'Get Wild pick',text:t}}).catch(function(){{}});}}else if(navigator.clipboard){{navigator.clipboard.writeText(t).catch(function(){{}});}}}})();</script>""", height=0)
 
 def fetch_alltrails_trails(lat, lng, radius_miles, difficulty=None):
     """Fetch trails from AllTrails API. Returns [] if key not configured."""
@@ -3297,6 +3308,8 @@ else:
         user_points  = get_user_points(st.session_state.user.id)
         _uid = st.session_state.user.id
 
+        _badge_stats = get_user_badge_stats(_uid)
+
         # Backfill badges once per session — catches retroactively earned badges silently
         if not st.session_state.get('badges_backfilled'):
             check_and_award_badges(_uid, silent=True)
@@ -3427,14 +3440,57 @@ else:
             if st.button(f"🔒 {len(_locked)} Locked Badges", type="secondary", key="locked_badges_toggle"):
                 st.session_state['show_locked_badges'] = not st.session_state.get('show_locked_badges', False)
             if st.session_state.get('show_locked_badges', False):
-                _cells = [
-                    f'<div style="background:#f5f5f5;border-radius:12px;padding:12px 6px;text-align:center;opacity:0.65;">'
-                    f'<div style="font-size:28px;line-height:1.2;filter:grayscale(1);">{b["emoji"]}</div>'
-                    f'<div style="font-size:11px;font-weight:700;margin-top:4px;color:#888;">{b["name"]}</div>'
-                    f'<div style="font-size:10px;color:#aaa;margin-top:2px;">{b["desc"]}</div>'
-                    f'</div>'
-                    for b in _locked
-                ]
+                _BADGE_PROGRESS = {
+                    'keep_going':       ('total_chosen',      5),
+                    'trailblazer':      ('total_chosen',     10),
+                    'wild_legend':      ('total_chosen',     50),
+                    'wild_at_heart':    ('wild_chosen',       5),
+                    'untamed':          ('wild_chosen',      25),
+                    'wild_thinker':     ('wild_idea_chosen',  3),
+                    'foodie':           ('rated_dining_4plus',5),
+                    'sommelier':        ('wine_saves',        5),
+                    'hop_head':         ('brewery_saves',     5),
+                    'coffee_snob':      ('coffee_saves',      3),
+                    'splurge_worthy':   ('splurge_chosen',    3),
+                    'romantic':         ('date_chosen',       5),
+                    'family_first':     ('family_chosen',     5),
+                    'social_butterfly': ('friends_chosen',    5),
+                    'outdoorsy':        ('outdoor_chosen',    5),
+                    'gem_hunter':       ('hidden_gem_saves',  5),
+                    'culture_vulture':  ('culture_saves',     3),
+                    'live_wire':        ('event_chosen',      3),
+                    'freeloader':       ('free_chosen',       5),
+                    'community':        ('referral_count',    3),
+                    'wildfire':         ('referral_count',   10),
+                }
+                _cells = []
+                for b in _locked:
+                    _bid = b['id']
+                    _prog = _BADGE_PROGRESS.get(_bid)
+                    if _prog:
+                        _stat_key, _threshold = _prog
+                        _current = _badge_stats.get(_stat_key, 0)
+                        _pct = min(100, int(_current / _threshold * 100))
+                        _almost_html = '<div style="font-size:0.72rem;color:#52b788;margin-top:2px;">Almost there! ✨</div>' if _pct >= 60 else ''
+                        _progress_html = (
+                            f'<div style="background:#e0e0e0;border-radius:3px;height:6px;margin-top:6px;">'
+                            f'<div style="background:#52b788;width:{_pct}%;height:6px;border-radius:3px;"></div>'
+                            f'</div>'
+                            f'<div style="text-align:right;margin-top:2px;">'
+                            f'<span style="font-size:0.72rem;color:#888;">{_current} / {_threshold}</span>'
+                            f'</div>'
+                            f'{_almost_html}'
+                        )
+                    else:
+                        _progress_html = '<div style="font-size:0.72rem;color:#aaa;margin-top:4px;">Not yet unlocked</div>'
+                    _cells.append(
+                        f'<div style="background:#f5f5f5;border-radius:12px;padding:12px 6px;text-align:center;opacity:0.75;">'
+                        f'<div style="font-size:28px;line-height:1.2;filter:grayscale(1);">{b["emoji"]}</div>'
+                        f'<div style="font-size:11px;font-weight:700;margin-top:4px;color:#888;">{b["name"]}</div>'
+                        f'<div style="font-size:10px;color:#aaa;margin-top:2px;">{b["desc"]}</div>'
+                        f'{_progress_html}'
+                        f'</div>'
+                    )
                 _render_badge_grid(_cells)
 
         # ── D) HOW TO EARN ───────────────────────────────────────────────
@@ -3452,6 +3508,7 @@ else:
 | Rate a visit (4★) | **2 pts** |
 | Rate a visit (5★) | **5 pts** |
 | Complete a Wild Idea | **3 pts** |
+| Share a spot | **2 pts** |
 | Invite a friend | **10 pts** |
 | Friend joins & explores | **15 pts** |
 | Earn a badge | **Varies** |
