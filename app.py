@@ -679,7 +679,7 @@ def get_user_preference_scores(user_id):
 
 def save_spot_to_db(user_id, name, address, category, rating=None, notes="",
                     mode="", group_type="", setting="", spend="", tier_name="",
-                    matched_tags=""):
+                    matched_tags="", photo_url="", description="", website=""):
     """Save a spot. Returns pre-save row count (0 = first save ever). Returns -1 on error."""
     try:
         pre_count = 0
@@ -703,6 +703,9 @@ def save_spot_to_db(user_id, name, address, category, rating=None, notes="",
             'spend':        spend or '',
             'tier_name':    tier_name or '',
             'matched_tags': matched_tags or '',
+            'photo_url':    photo_url or '',
+            'description':  description or '',
+            'website':      website or '',
         }).execute()
 
         if rating != 1:
@@ -1838,6 +1841,9 @@ def render_wild_idea_card(idea, location_input, user_id):
             spend=st.session_state.get('mem_spend', ''),
             tier_name='Wild Idea',
             matched_tags=','.join(str(t) for t in tags if isinstance(t, str) and t),
+            photo_url=idea.get('photo_url') or '',
+            description=idea.get('why_now') or '',
+            website=website or '',
         )
         with col1:
             if st.button("⭐ Save for Later", key=f"wi_save_{_key}", use_container_width=True):
@@ -2587,6 +2593,9 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
             spend=st.session_state.get('mem_spend', ''),
             tier_name=spot.get('tier_name', ''),
             matched_tags=_mt_str,
+            photo_url=spot.get('photo_url') or spot.get('image_url') or '',
+            description=spot.get('why_its_perfect') or '',
+            website=spot.get('website') or '',
         )
         with col1:
             if st.button("⭐ Save", key=f"save_{index}_{spot['name']}", use_container_width=True, help="Save for later"):
@@ -3701,6 +3710,135 @@ else:
             st.session_state.is_loading = False
             st.rerun()
 
+    @st.dialog("📍 Spot Details", width="large")
+    def _spot_modal(saved):
+        _uid  = st.session_state.user.id
+        _sid  = saved['id']
+        _name = saved.get('spot_name', '')
+        _addr = saved.get('address', '')
+        _cat  = saved.get('category', '')
+        _tier = saved.get('tier_name', '')
+        _desc = saved.get('description', '')
+        _photo = saved.get('photo_url', '') or ''
+        _web  = saved.get('website', '') or ''
+        _tags_str = saved.get('matched_tags', '') or ''
+        _rating = saved.get('rating') or 0
+        _notes  = saved.get('user_notes', '') or ''
+        _is_chosen = 'chosen' in _notes.lower()
+
+        # Photo
+        _fallback = get_fallback_image(_cat, _desc or _tier)
+        st.image(_photo or _fallback, use_container_width=True)
+
+        # Tier color
+        _tn = _tier.lower()
+        if _tn in {"the sure thing", "the crowd pleaser", "the local favorite", "the classic", "the reliable"}:
+            _tc = "#52b788"
+        elif _tn in {"the fresh take", "the curveball", "the surprise", "the interesting pick", "the plot twist"}:
+            _tc = "#f4a261"
+        elif _tn in {"the hidden gem", "the wild card", "the adventure", "the deep cut", "the discovery"}:
+            _tc = "#e76f51"
+        else:
+            _tc = "#2d6a4f"
+
+        # Tags HTML
+        _tags_list = [t.strip() for t in _tags_str.split(',') if t.strip()]
+        _tags_html = ''.join(
+            f'<span class="wc-tag">✓ {t}</span>'
+            for t in _tags_list if t and t not in _ALL_TIER_NAMES
+        )
+
+        # Utility links
+        _search_q = urllib.parse.quote(f"{_name} {_addr}")
+        _map_url  = f"https://www.google.com/maps/search/?api=1&query={_search_q}"
+        _enc_addr = urllib.parse.quote(_addr) if _addr else ''
+        _uber_url = f"https://m.uber.com/ul/?action=setPickup&pickup=my_location&dropoff[formatted_address]={_enc_addr}"
+        _share_lines = [
+            f"🌿 Get Wild pick: {_name}", _cat,
+            _desc[:120] if _desc else '',
+            f"📍 {_addr}", f"🗺️ {_map_url}",
+        ]
+        if _web:
+            _share_lines.append(f"🌐 {_web}")
+        _share_lines.append("Found on Get Wild → getwild.streamlit.app")
+        _share_enc  = urllib.parse.quote('\n'.join(l for l in _share_lines if l))
+        _share_subj = urllib.parse.quote(f"🌿 Get Wild pick: {_name}")
+        _sep = '<span class="wc-util-sep">|</span>'
+        _web_part = f'<a href="{_web}" target="_blank" class="wc-util-link">🌐 Website</a>{_sep}' if _web else ''
+        _util_html = (
+            f'<div class="wc-utility">'
+            f'{_web_part}'
+            f'<a href="{_map_url}" target="_blank" class="wc-util-link">🗺️ Directions</a>{_sep}'
+            f'<a href="{_uber_url}" target="_blank" class="wc-util-link">🚗 Uber</a>{_sep}'
+            f'<a href="sms:?body={_share_enc}" class="wc-util-link">📱 Text</a>{_sep}'
+            f'<a href="mailto:?subject={_share_subj}&body={_share_enc}" class="wc-util-link">📧 Email</a>'
+            f'</div>'
+        )
+
+        # Card-style HTML
+        _tier_badge = (
+            f'<span style="display:inline-block;background:rgba(0,0,0,0.75);color:#fff;'
+            f'font-size:0.8rem;font-weight:600;padding:4px 10px;border-radius:20px;'
+            f'border-left:3px solid {_tc};margin-bottom:8px;">✦ {_tier}</span>'
+            if _tier else ''
+        )
+        st.markdown(
+            f'{_tier_badge}'
+            f'<div class="wc-name" style="margin-top:6px;">{_name}</div>'
+            f'<div class="wc-meta">{_cat}</div>'
+            f'<div class="wc-address">📍 {_addr}</div>'
+            f'{_util_html}'
+            f'<hr class="wc-hr">'
+            f'<p class="wc-pitch">{_desc}</p>'
+            f'<div class="wc-tags">{_tags_html}</div>',
+            unsafe_allow_html=True
+        )
+
+        st.divider()
+
+        # I'm Going
+        if not _is_chosen:
+            if st.button("✅ I'm Going", type="primary", use_container_width=True, key=f"modal_going_{_sid}"):
+                supabase.table('saved_spots').update({'user_notes': 'chosen'}).eq('id', _sid).execute()
+                update_streak(_uid)
+                award_points(_uid, "going", POINTS['going_top3'], "Chose an outing")
+                check_and_award_badges(_uid)
+                st.toast("✅ Let's go! Have an amazing time.")
+                st.rerun()
+        else:
+            st.success("Chosen ✓ — you went here!")
+
+        st.divider()
+
+        # Rating + Notes form
+        with st.form(f"modal_form_{_sid}"):
+            _star_opts = ["★", "★★", "★★★", "★★★★", "★★★★★"]
+            _cur_val = _star_opts[max(0, (_rating or 3) - 1)]
+            new_rating_stars = st.select_slider(
+                "Rate this spot (★ = Blacklist)", options=_star_opts, value=_cur_val
+            )
+            new_rating = _star_opts.index(new_rating_stars) + 1
+            _display_notes = _notes if _notes not in ('chosen', '') else ''
+            new_notes = st.text_input("Private Notes", value=_display_notes)
+            if st.form_submit_button("💾 Save Changes", type="primary", use_container_width=True):
+                supabase.table('saved_spots').update(
+                    {'rating': new_rating, 'user_notes': new_notes}
+                ).eq('id', _sid).execute()
+                if new_rating == 5:
+                    award_points(_uid, "rating", POINTS['rate'] + POINTS['rate_perfect'], "5-star rating!")
+                elif new_rating >= 4:
+                    award_points(_uid, "rating", POINTS['rate'], "Rated a visit")
+                if new_rating >= 4:
+                    check_and_award_badges(_uid)
+                st.session_state.saved_spots_dirty = True
+                st.rerun()
+
+        # Delete (outside form so it's always visible)
+        if st.button("🗑️ Delete Spot", key=f"modal_del_{_sid}", help="Remove from your ledger permanently"):
+            if delete_spot_from_db(_sid):
+                st.session_state.saved_spots_dirty = True
+                st.rerun()
+
     with tab_saved:
         st.subheader("Your Adventure Ledger")
         st.write("Rate your past spots. Spots rated 1-star will NEVER be recommended again.")
@@ -3727,39 +3865,57 @@ else:
             nudge_ids = {n['id'] for n in nudge_spots}
 
             for saved in saved_spots:
+                # Nudge banner for "chosen" spots not yet rated
                 if saved['id'] in nudge_ids:
                     st.markdown(
                         '<div style="border-left:4px solid #f4a261;border-radius:6px;padding:8px 12px;background:#fff8f0;margin-bottom:4px;">'
-                        f'⭐ <b>How was your visit to {saved["spot_name"]}?</b> Tap to rate</div>',
+                        f'⭐ <b>How was your visit to {saved["spot_name"]}?</b> Tap → to rate</div>',
                         unsafe_allow_html=True
                     )
-                icon = "🚫" if saved['rating'] == 1 else "📍"
-                _spot_key = f"show_spot_{saved['id']}"
-                if st.button(f"{icon} {saved['spot_name']}", type="secondary", use_container_width=True, key=f"spot_toggle_{saved['id']}"):
-                    st.session_state[_spot_key] = not st.session_state.get(_spot_key, False)
-                if st.session_state.get(_spot_key, False):
-                    st.caption(saved['address'])
 
-                    with st.form(f"rate_form_{saved['id']}"):
-                        _star_opts = ["★", "★★", "★★★", "★★★★", "★★★★★"]
-                        current_rating = saved['rating'] if saved['rating'] else 3
-                        new_rating_stars = st.select_slider("Rate this spot (★ = Blacklist)", options=_star_opts, value=_star_opts[current_rating - 1])
-                        new_rating = _star_opts.index(new_rating_stars) + 1
-                        notes = st.text_input("Private Notes", value=saved.get('user_notes', ''))
+                # Rich list row
+                _icon       = "🚫" if saved.get('rating') == 1 else "📍"
+                _is_chosen  = 'chosen' in (saved.get('user_notes') or '').lower()
+                _rating_val = saved.get('rating') or 0
+                _tier_name  = saved.get('tier_name') or ''
+                _category   = saved.get('category') or ''
 
-                        if st.form_submit_button("Update Feedback", type="primary"):
-                            supabase.table('saved_spots').update({'rating': new_rating, 'user_notes': notes}).eq('id', saved['id']).execute()
-                            if new_rating == 5:
-                                award_points(st.session_state.user.id, "rating", POINTS['rate'] + POINTS['rate_perfect'], "5-star rating!")
-                            elif new_rating >= 4:
-                                award_points(st.session_state.user.id, "rating", POINTS['rate'], "Rated a visit")
-                            if new_rating >= 4:
-                                check_and_award_badges(st.session_state.user.id)
-                            st.success("Feedback saved!")
-                            st.session_state.saved_spots_dirty = True
-                            st.rerun()
+                # Tier badge color
+                _tn = _tier_name.lower()
+                if _tn in {"the sure thing", "the crowd pleaser", "the local favorite", "the classic", "the reliable"}:
+                    _tbg, _tfc = "#52b788", "#fff"
+                elif _tn in {"the fresh take", "the curveball", "the surprise", "the interesting pick", "the plot twist"}:
+                    _tbg, _tfc = "#f4a261", "#fff"
+                elif _tn in {"the hidden gem", "the wild card", "the adventure", "the deep cut", "the discovery"}:
+                    _tbg, _tfc = "#e76f51", "#fff"
+                else:
+                    _tbg, _tfc = "#2d6a4f", "#fff"
 
-                    if st.button("🗑️ Delete Spot", key=f"del_{saved['id']}"):
-                        if delete_spot_from_db(saved['id']):
-                            st.session_state.saved_spots_dirty = True
-                            st.rerun()
+                _tier_badge_html = (
+                    f'<span style="background:{_tbg};color:{_tfc};font-size:0.65rem;font-weight:600;'
+                    f'padding:2px 7px;border-radius:10px;margin-left:6px;vertical-align:middle;">'
+                    f'{_tier_name}</span>'
+                ) if _tier_name else ''
+                _stars_html = (
+                    f'<span style="color:#f59e0b;font-size:0.78rem;">{"⭐" * _rating_val}</span>'
+                ) if _rating_val and _rating_val > 1 else ''
+                _chosen_html = (
+                    '<span style="color:#52b788;font-size:0.75rem;font-weight:600;margin-left:6px;">Chosen ✓</span>'
+                ) if _is_chosen else ''
+                _sub_sep = ' · ' if _category and (_stars_html or _chosen_html) else ''
+
+                col_info, col_action = st.columns([5, 1])
+                with col_info:
+                    st.markdown(
+                        f'<div style="padding:6px 0;">'
+                        f'<div style="font-weight:600;font-size:0.95rem;">'
+                        f'{_icon} {saved["spot_name"]}{_tier_badge_html}</div>'
+                        f'<div style="color:#888;font-size:0.78rem;margin-top:2px;">'
+                        f'{_category}{_sub_sep}{_stars_html}{_chosen_html}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
+                with col_action:
+                    if st.button("›", key=f"view_{saved['id']}", use_container_width=True,
+                                 help=f"Open {saved['spot_name']}"):
+                        _spot_modal(saved)
