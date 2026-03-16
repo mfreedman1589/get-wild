@@ -530,6 +530,11 @@ def get_user_preference_scores(user_id):
     _TASTE_KEYWORDS = [
         "wine", "brewery", "bar", "coffee", "museum", "outdoor", "music",
         "comedy", "sports", "restaurant", "jazz", "cocktail", "theater", "brunch",
+        "rooftop", "speakeasy", "live music", "dog-friendly", "patio", "waterfront",
+        "farm-to-table", "tasting menu", "food hall", "pop-up", "art gallery",
+        "trivia", "axe throwing", "escape room", "pottery", "painting", "hiking",
+        "kayaking", "scenic", "historic", "hidden", "intimate", "lively",
+        "romantic", "cozy", "trendy",
     ]
     _STOP_WORDS = {'the', 'a', 'an', 'and', 'or', 'of', 'in', 'at', 'to', 'for', 'by', 'with', 'on', '&'}
     _GENERIC_STOP = {
@@ -538,7 +543,7 @@ def get_user_preference_scores(user_id):
         'american', 'italian', 'asian', 'modern', 'style',
     }
     try:
-        res = supabase.table('saved_spots').select('spot_name, category, rating, mode, user_notes, matched_tags').eq('user_id', user_id).execute()
+        res = supabase.table('saved_spots').select('spot_name, category, rating, mode, user_notes, matched_tags, saved_at').eq('user_id', user_id).order('saved_at', desc=False).execute()
         spots = res.data or []
 
         # Also pull vibe_preference free text from user profile
@@ -574,7 +579,7 @@ def get_user_preference_scores(user_id):
             cat = (spot.get('category') or '').strip()
             name = (spot.get('spot_name') or '').lower()
             cat_lower = cat.lower()
-            combined = name + ' ' + cat_lower
+            combined = name + ' ' + cat_lower + ' ' + user_notes
 
             # Parse matched_tags saved as comma-separated string
             _db_tags_str = (spot.get('matched_tags') or '').lower()
@@ -634,12 +639,39 @@ def get_user_preference_scores(user_id):
 
         print(f"[WildDNA] top_keywords={top_keywords} avoid_keywords={avoid_keywords}")
 
+        # Personality evolution: compare recent 3 vs older history
+        emerging_keyword = None
+        if total_spots >= 5:
+            recent_spots = spots[-3:]
+            older_spots = spots[:-3]
+            recent_kws, older_kws = set(), set()
+            for _spot in recent_spots:
+                _n = (_spot.get('spot_name') or '').lower()
+                _c = (_spot.get('category') or '').lower()
+                _u = (_spot.get('user_notes') or '').lower()
+                _comb = _n + ' ' + _c + ' ' + _u
+                for kw in _TASTE_KEYWORDS:
+                    if kw in _comb:
+                        recent_kws.add(kw)
+            for _spot in older_spots:
+                _n = (_spot.get('spot_name') or '').lower()
+                _c = (_spot.get('category') or '').lower()
+                _u = (_spot.get('user_notes') or '').lower()
+                _comb = _n + ' ' + _c + ' ' + _u
+                for kw in _TASTE_KEYWORDS:
+                    if kw in _comb:
+                        older_kws.add(kw)
+            new_in_recent = recent_kws - older_kws
+            if new_in_recent:
+                emerging_keyword = next(iter(new_in_recent))
+
         return {
             "top_categories": top_categories,
             "top_keywords": top_keywords,
             "avoid_keywords": avoid_keywords,
             "rated_count": len([s for s in spots if (s.get('rating') or 0) >= 4]),
             "total_spots": total_spots,
+            "emerging_keyword": emerging_keyword,
         }
     except Exception as _e:
         print(f"[WildDNA] error: {_e}")
@@ -1140,7 +1172,7 @@ def _run_places_query(text_query, lat, lng, radius_miles, page_size=8):
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": GOOGLE_API_KEY,
-        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.priceLevel,places.currentOpeningHours,places.websiteUri,places.photos,places.editorialSummary,places.location"
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.priceLevel,places.currentOpeningHours,places.regularOpeningHours,places.websiteUri,places.photos,places.editorialSummary,places.location"
     }
     radius_meters = int(radius_miles * 1609.34)
     try:
@@ -1536,9 +1568,10 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
         candidates = []
         for p in raw_places[:5]:
             candidates.append({
-                "name":     (p.get('displayName', {}).get('text') or ''),
-                "summary":  (p.get('editorialSummary', {}).get('text') or ''),
-                "address":  (p.get('formattedAddress') or ''),
+                "name":        (p.get('displayName', {}).get('text') or ''),
+                "summary":     (p.get('editorialSummary', {}).get('text') or ''),
+                "address":     (p.get('formattedAddress') or ''),
+                "day_pattern": _get_venue_day_pattern(p.get('regularOpeningHours')),
             })
 
         # Ask GPT to pick the most surprising option from real data
@@ -1571,6 +1604,9 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
                 f"surprising and delightful option for a {time_context} outing{pref_clause}.{excl_clause} "
                 f"{weather_clause}{filters_clause}"
                 "Prefer unconventional, unique, or hidden gems over mainstream choices. "
+                "Each venue may have a day_pattern field: 'weekend_only', 'weekday_staple', 'evenings_only', 'all_day', or null. "
+                "Deprioritize 'weekend_only' venues for weekday outings; prefer 'evenings_only' or 'all_day' for evening searches. "
+                "When the schedule is relevant, mention the fit naturally in why_now. "
                 f"Venues: {json.dumps(candidates)}. "
                 "Return JSON: name (exact venue name from the list), "
                 "category (concise venue type, e.g. 'Escape Room', 'Jazz Club'), "
@@ -1611,6 +1647,32 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
     except:
         pass
     return None
+
+def _get_venue_day_pattern(regular_hours):
+    """Classify a venue's weekly schedule from regularOpeningHours periods.
+    Returns: 'weekend_only', 'weekday_staple', 'evenings_only', 'all_day', or None."""
+    if not regular_hours:
+        return None
+    periods = regular_hours.get('periods', [])
+    if not periods:
+        return None
+    # Places API: 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+    WEEKDAYS = {1, 2, 3, 4}   # Mon–Thu
+    WEEKENDS = {0, 5, 6}       # Fri, Sat, Sun
+    open_days = {p.get('open', {}).get('day') for p in periods if p.get('open')}
+    open_days.discard(None)
+    has_weekdays = bool(open_days & WEEKDAYS)
+    has_weekends = bool(open_days & WEEKENDS)
+    open_hours = [p.get('open', {}).get('hour', 0) for p in periods if p.get('open')]
+    is_evenings_only = bool(open_hours) and all(h >= 17 for h in open_hours)
+    if not has_weekdays and has_weekends:
+        return 'weekend_only'
+    if is_evenings_only:
+        return 'evenings_only'
+    if has_weekdays and not has_weekends:
+        return 'weekday_staple'
+    return 'all_day'
+
 
 def _format_opening_hours(opening_hours):
     """Returns a short display string like '🟢 Open · Closes 10 PM' or '🔴 Closed · Opens 5 PM'."""
@@ -1857,9 +1919,13 @@ def get_ai_recommendations(places_data, live_events_data, weather_report, filter
         trimmed_t1 = _filter_tier(places_data.get('tier1', []))[:5]
         trimmed_t2 = _filter_tier(places_data.get('tier2', []))[:5]
         trimmed_t3 = _filter_tier(places_data.get('tier3', []))[:5]
+        for _p in trimmed_t1 + trimmed_t2 + trimmed_t3:
+            _p['day_pattern'] = _get_venue_day_pattern(_p.get('regularOpeningHours'))
         trimmed_places = None  # not used in tiered mode
     else:
         trimmed_places = _filter_tier(list(places_data) if places_data else [])[:8]
+        for _p in trimmed_places:
+            _p['day_pattern'] = _get_venue_day_pattern(_p.get('regularOpeningHours'))
     # Python-level events gate — AI never sees events when food=Full Meal or outdoor_vibe=Adventure/Nature
     _food_filter = filters_dict.get('food', '')
     _outdoor_vibe = filters_dict.get('outdoor_vibe', '')
@@ -2114,6 +2180,15 @@ def get_ai_recommendations(places_data, live_events_data, weather_report, filter
             "If any doubt about an event's location or date, skip it and use a Google Places result."
         )
 
+    day_pattern_rule = (
+        "SCHEDULE PREFERENCE: Each venue may include a day_pattern field. "
+        "Values: 'weekend_only'=closed most weekdays, 'weekday_staple'=not open weekends, "
+        "'evenings_only'=opens at/after 5 PM, 'all_day'=broadly open, absent=unknown. "
+        "For weekday outings, prefer 'all_day' or 'weekday_staple' over 'weekend_only'. "
+        "For weekend outings, 'weekend_only' is fine. "
+        "For evening time filters, prefer 'evenings_only' or 'all_day'."
+    )
+
     system_prompt = f"""You are a local concierge for 'Get Wild'.
 
 CONTEXT: {location_name} | {weather_report} | {target_date_str} ({relative_day}) | {filters_dict['time']} | {filters_dict['group']}, {filters_dict['food']}, {filters_dict['vibe']}
@@ -2138,6 +2213,7 @@ RULES:
 12. FRESHNESS BONUS: Any venue tagged just_opened=True in the input data is a priority pick for the TIER 3 (Hidden Gem) or TIER 2 (Fresh Take) recommendation — these are rare finds. Always include one if available.
 13. TRAIL DATA: Some results may be tagged source=alltrails. These are real verified trails with difficulty ratings and length. For outdoor/active searches, strongly consider including one trail as the Adventure or Hidden Gem tier pick.
 {f"14. {outdoor_vibe_rule}" if outdoor_vibe_rule else ""}{specific_rule}
+15. {day_pattern_rule}
 
 {instruction}
 
@@ -3557,12 +3633,20 @@ else:
 
         # ── WILD DNA ────────────────────────────────────────────────────────
         st.subheader("🧬 Your Wild DNA")
-        _dna_scores  = get_user_preference_scores(_uid_p)
-        _dna_kws     = (_dna_scores.get('top_keywords') or [])[:6]
-        _dna_avoid   = (_dna_scores.get('avoid_keywords') or [])[:4]
-        _dna_total   = _dna_scores.get('total_spots') or 0
+        _dna_scores    = get_user_preference_scores(_uid_p)
+        _dna_kws       = (_dna_scores.get('top_keywords') or [])[:6]
+        _dna_avoid     = (_dna_scores.get('avoid_keywords') or [])[:4]
+        _dna_total     = _dna_scores.get('total_spots') or 0
+        _dna_emerging  = _dna_scores.get('emerging_keyword')
         if _dna_total:
-            st.caption(f"Based on your {_dna_total} explorations, you're drawn to:")
+            if _dna_total <= 5:
+                st.caption("Still learning your vibe 🌱 Keep exploring")
+            elif _dna_total <= 15:
+                st.caption(f"Based on {_dna_total} explorations, you're drawn to:")
+            elif _dna_total <= 30:
+                st.caption(f"After {_dna_total} adventures, your Wild DNA is clear:")
+            else:
+                st.caption(f"A true Wild explorer — {_dna_total} adventures deep:")
         else:
             st.caption("Explore spots to build your taste profile")
         if _dna_kws or _dna_avoid:
@@ -3570,8 +3654,10 @@ else:
                 _pills = "".join(f'<span class="gw-dna-pill">{kw}</span>' for kw in _dna_kws)
                 st.markdown(f'<div style="margin-bottom:6px;">✨ You love: {_pills}</div>', unsafe_allow_html=True)
             if _dna_avoid:
-                _pills = "".join(f'<span class="gw-dna-pill" style="background:#fce4ec;color:#b71c1c;">{kw}</span>' for kw in _dna_avoid)
-                st.markdown(f'<div style="margin-bottom:6px;">👎 You tend to skip: {_pills}</div>', unsafe_allow_html=True)
+                _pills = "".join(f'<span class="gw-dna-pill" style="background:#fff0f0;color:#c53030;">{kw}</span>' for kw in _dna_avoid)
+                st.markdown(f'<div style="margin-bottom:6px;">🚫 You tend to skip: {_pills}</div>', unsafe_allow_html=True)
+            if _dna_emerging:
+                st.markdown(f'<p style="color:#5a8a6a;font-size:0.85rem;font-style:italic;margin-top:4px;">🌿 Something new is entering your radar: {_dna_emerging}</p>', unsafe_allow_html=True)
             if len(_dna_kws) < 4:
                 st.markdown('<p style="color:#9ca3af;font-size:0.82rem;margin-top:4px;">Save and rate more spots to unlock your full Wild DNA 🧬</p>', unsafe_allow_html=True)
         elif _dna_total:
