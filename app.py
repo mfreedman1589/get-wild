@@ -1733,7 +1733,7 @@ def render_wild_idea_card(idea, location_input, user_id):
     _wi_is_dining = any(kw in (category or '').lower() for kw in _WI_DINING_KWS)
     _wi_res_url = idea.get('reservations_url') or ''
     if not _wi_res_url and _wi_is_dining:
-        _wi_res_url = f"https://www.opentable.com/s/?term={urllib.parse.quote(name)}&covers=2"
+        _wi_res_url = f"https://www.google.com/search?q={urllib.parse.quote(name + ' reservations')}"
     wi_reserve_part = f'<a href="{_wi_res_url}" target="_blank" class="wc-util-link">📅 Reserve</a>{sep}' if _wi_res_url else ''
     utility_html = (
         f'<div class="wc-utility">'
@@ -1790,10 +1790,10 @@ def render_wild_idea_card(idea, location_input, user_id):
             if st.button("✅ I'm Going", key=f"wi_going_{_key}", use_container_width=True, type="primary"):
                 save_spot_to_db(user_id, name, address, category, notes="chosen", **_wi_ctx)
                 update_streak(user_id)
+                st.toast("💡 Wild Idea accepted! Go make a memory.")
                 award_points(user_id, "going", POINTS['wild_idea'], f"🎲 Wild Idea accepted! +{POINTS['wild_idea']} points")
                 check_and_award_badges(user_id)
                 st.session_state.wild_idea_expanded = False
-                st.balloons()
                 st.rerun()
         with col3:
             if st.button("✕ Not for me", key=f"wi_nope_{_key}", use_container_width=True):
@@ -2465,7 +2465,7 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
     _is_dining = any(kw in (category or '').lower() for kw in _DINING_KWS)
     _res_url = spot.get('reservations_url') or ''
     if not _res_url and _is_dining:
-        _res_url = f"https://www.opentable.com/s/?term={urllib.parse.quote(spot['name'])}&covers=2"
+        _res_url = f"https://www.google.com/search?q={urllib.parse.quote(spot['name'] + ' reservations')}"
     reserve_part = f'<a href="{_res_url}" target="_blank" class="wc-util-link">📅 Reserve</a>{sep}' if _res_url else ''
     utility_html = (
         f'<div class="wc-utility">'
@@ -2526,6 +2526,8 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
             if st.button("✅ I'm Going", key=f"going_{index}_{spot['name']}", use_container_width=True, type="primary", help="Mark as chosen"):
                 save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'), notes="chosen", **_ctx)
                 update_streak(user_id)
+                _going_msg = "🎲 Wild choice! Have an incredible time." if mode == 'get_wild' else "✅ Let's go! Have an amazing time."
+                st.toast(_going_msg)
                 _gpts = POINTS['going_wild'] if mode == 'get_wild' else POINTS['going_top3']
                 award_points(user_id, "going", _gpts, "Chose an outing")
                 check_and_award_badges(user_id)
@@ -3187,7 +3189,7 @@ else:
                                     _had_dupe = True
                             ai_results['recommendations'] = _deduped
                             if _had_dupe:
-                                st.warning("⚠️ Some duplicate venues were removed. Try 🔀 Shuffle for more variety.")
+                                st.warning("⚠️ Some duplicate venues were removed. Try 🔀 Surprise Me Again for more variety.")
 
                             st.session_state.current_results = ai_results
                             try:
@@ -3269,7 +3271,7 @@ else:
                 # --- SHUFFLE BUTTON (ONLY IN TOP 3 MODE) ---
                 if mode == "top_3":
                     st.write("---")
-                    if st.button("🔀 Shuffle", use_container_width=True):
+                    if st.button("🔀 Surprise Me Again", use_container_width=True):
                         st.session_state.trigger_fetch = True
                         st.session_state.skip_cache = True
                         st.session_state.is_loading = True
