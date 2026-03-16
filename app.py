@@ -486,6 +486,31 @@ def get_favorite_spots(user_id):
         return [f"{spot['spot_name']} ({spot['category']})" for spot in res.data] if res.data else []
     except: return []
 
+def update_streak(user_id):
+    """Update weekly outing streak after 'I'm Going'. Call once per going action."""
+    try:
+        from datetime import timedelta
+        _now = datetime.utcnow()
+        _current_week = _now.strftime('%G-W%V')
+        _last_week    = (_now - timedelta(weeks=1)).strftime('%G-W%V')
+        res = supabase.table('user_profiles').select('current_streak, last_outing_week').eq('id', user_id).execute()
+        _row = res.data[0] if res.data else {}
+        _stored_week = _row.get('last_outing_week') or ''
+        _streak      = _row.get('current_streak') or 0
+        if _stored_week == _current_week:
+            return  # already counted this week
+        elif _stored_week == _last_week:
+            _new_streak = _streak + 1
+        else:
+            _new_streak = 1
+        supabase.table('user_profiles').upsert({
+            'id': user_id,
+            'current_streak': _new_streak,
+            'last_outing_week': _current_week,
+        }).execute()
+    except:
+        pass
+
 def generate_referral_code(user_id):
     """Returns the user's referral code, generating and saving one if needed."""
     try:
@@ -1702,9 +1727,18 @@ def render_wild_idea_card(idea, location_input, user_id):
     share_body_enc = urllib.parse.quote(share_text)
     sep = '<span class="wc-util-sep">|</span>'
     website_part = f'<a href="{website}" target="_blank" class="wc-util-link">🌐 Website</a>{sep}' if website else ''
+    _WI_DINING_KWS = {'restaurant', 'dining', 'cafe', 'bistro', 'bar', 'grill', 'kitchen',
+                      'brunch', 'eatery', 'steakhouse', 'sushi', 'pizza', 'burger', 'diner',
+                      'brasserie', 'trattoria', 'tavern', 'pub', 'chophouse', 'ramen'}
+    _wi_is_dining = any(kw in (category or '').lower() for kw in _WI_DINING_KWS)
+    _wi_res_url = idea.get('reservations_url') or ''
+    if not _wi_res_url and _wi_is_dining:
+        _wi_res_url = f"https://www.opentable.com/s/?term={urllib.parse.quote(name)}&covers=2"
+    wi_reserve_part = f'<a href="{_wi_res_url}" target="_blank" class="wc-util-link">📅 Reserve</a>{sep}' if _wi_res_url else ''
     utility_html = (
         f'<div class="wc-utility">'
         f'{website_part}'
+        f'{wi_reserve_part}'
         f'<a href="{map_url}" target="_blank" class="wc-util-link">🗺️ Directions</a>{sep}'
         f'<a href="{uber_url}" target="_blank" class="wc-util-link">🚗 Uber</a>{sep}'
         f'<a href="sms:?body={share_encoded}" class="wc-util-link">📱 Text</a>{sep}'
@@ -1755,6 +1789,7 @@ def render_wild_idea_card(idea, location_input, user_id):
         with col2:
             if st.button("✅ I'm Going", key=f"wi_going_{_key}", use_container_width=True, type="primary"):
                 save_spot_to_db(user_id, name, address, category, notes="chosen", **_wi_ctx)
+                update_streak(user_id)
                 award_points(user_id, "going", POINTS['wild_idea'], f"🎲 Wild Idea accepted! +{POINTS['wild_idea']} points")
                 check_and_award_badges(user_id)
                 st.session_state.wild_idea_expanded = False
@@ -2110,7 +2145,7 @@ RULES:
 
 {'' if mode == 'get_wild' else 'FALLBACK: If strict rules leave fewer than 3 valid options, relax non-critical preferences (variety, price matching, hours) to ensure exactly 3 recommendations are always returned. It is always better to return 3 slightly imperfect results than 1 perfect result. Never return fewer than 3.'}
 
-Return JSON with a 'recommendations' array. Each item: name, tier_name, category, address (exact), why_its_perfect (2-3 sentences), vibe_check (3 words), matched_tags (2-3 short descriptor strings, always required — e.g. "cozy", "date night", "craft cocktails"; if a specific keyword was given it MUST appear in matched_tags), website, lat, lng, spontaneity_score (integer 1-10 using this strict rubric — DO NOT inflate scores: 1-2=mainstream chain or famous landmark everyone knows (Smithsonian, Cheesecake Factory, Central Park); 3-4=solid local spot most people have heard of or would immediately think to Google (neighborhood brewery, popular brunch spot, well-known hiking trail); 5-6=genuinely interesting find that most people wouldn't think of themselves but is easy to enjoy (rooftop bar with no reservations needed, lesser-known gallery, unique food hall); 7-8=surprisingly unconventional or hard-to-discover — requires insider knowledge or creative thinking (hidden speakeasy, axe throwing bar, ceramics class, underground supper club); 9-10=truly rare, unexpected, or brand-new — most locals haven't heard of it yet (pop-up experience, brand-new venue in soft opening, extremely niche activity). A small local museum scores 3-4. A neighborhood park scores 2-3. A bowling alley scores 5. Axe throwing scores 7. A brand-new pop-up art installation scores 9.)"""
+Return JSON with a 'recommendations' array. Each item: name, tier_name, category, address (exact), why_its_perfect (2-3 sentences), vibe_check (3 words), matched_tags (2-3 short descriptor strings, always required — e.g. "cozy", "date night", "craft cocktails"; if a specific keyword was given it MUST appear in matched_tags), website, reservations_url (if you have high confidence this specific venue accepts reservations on OpenTable or Resy, return the direct venue booking URL — otherwise null; do not guess or construct search URLs), lat, lng, spontaneity_score (integer 1-10 using this strict rubric — DO NOT inflate scores: 1-2=mainstream chain or famous landmark everyone knows (Smithsonian, Cheesecake Factory, Central Park); 3-4=solid local spot most people have heard of or would immediately think to Google (neighborhood brewery, popular brunch spot, well-known hiking trail); 5-6=genuinely interesting find that most people wouldn't think of themselves but is easy to enjoy (rooftop bar with no reservations needed, lesser-known gallery, unique food hall); 7-8=surprisingly unconventional or hard-to-discover — requires insider knowledge or creative thinking (hidden speakeasy, axe throwing bar, ceramics class, underground supper club); 9-10=truly rare, unexpected, or brand-new — most locals haven't heard of it yet (pop-up experience, brand-new venue in soft opening, extremely niche activity). A small local museum scores 3-4. A neighborhood park scores 2-3. A bowling alley scores 5. Axe throwing scores 7. A brand-new pop-up art installation scores 9.)"""
 
     try:
         response = client.chat.completions.create(
@@ -2424,9 +2459,18 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
         website_part = f'<a href="{spot["website"]}" target="_blank" class="wc-util-link">{link_label}</a>{sep}'
     else:
         website_part = ''
+    _DINING_KWS = {'restaurant', 'dining', 'cafe', 'bistro', 'bar', 'grill', 'kitchen',
+                   'brunch', 'eatery', 'steakhouse', 'sushi', 'pizza', 'burger', 'diner',
+                   'brasserie', 'trattoria', 'tavern', 'pub', 'chophouse', 'ramen'}
+    _is_dining = any(kw in (category or '').lower() for kw in _DINING_KWS)
+    _res_url = spot.get('reservations_url') or ''
+    if not _res_url and _is_dining:
+        _res_url = f"https://www.opentable.com/s/?term={urllib.parse.quote(spot['name'])}&covers=2"
+    reserve_part = f'<a href="{_res_url}" target="_blank" class="wc-util-link">📅 Reserve</a>{sep}' if _res_url else ''
     utility_html = (
         f'<div class="wc-utility">'
         f'{website_part}'
+        f'{reserve_part}'
         f'<a href="{map_url}" target="_blank" class="wc-util-link">🗺️ Directions</a>{sep}'
         f'<a href="{uber_url}" target="_blank" class="wc-util-link">🚗 Uber</a>{sep}'
         f'<a href="sms:?body={share_encoded}" class="wc-util-link">📱 Text</a>{sep}'
@@ -2481,6 +2525,7 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
         with col2:
             if st.button("✅ I'm Going", key=f"going_{index}_{spot['name']}", use_container_width=True, type="primary", help="Mark as chosen"):
                 save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'), notes="chosen", **_ctx)
+                update_streak(user_id)
                 _gpts = POINTS['going_wild'] if mode == 'get_wild' else POINTS['going_top3']
                 award_points(user_id, "going", _gpts, "Chose an outing")
                 check_and_award_badges(user_id)
@@ -2741,7 +2786,18 @@ else:
 
     with tab_explore:
         user_profile = get_profile(st.session_state.user.id)
-        
+
+        # Streak-at-risk: Sunday + haven't gone out this week + streak > 1
+        try:
+            _now_local = datetime.utcnow()
+            if _now_local.weekday() == 6:  # Sunday
+                _cw = _now_local.strftime('%G-W%V')
+                _up = user_profile or {}
+                if (_up.get('current_streak') or 0) > 1 and (_up.get('last_outing_week') or '') != _cw:
+                    st.warning("⚡ Your streak is at risk — get wild before midnight!")
+        except:
+            pass
+
         # --- SCREEN 1: THE INPUT FORM ---
         if not st.session_state.search_active:
 
@@ -3254,6 +3310,25 @@ else:
             f'</div>',
             unsafe_allow_html=True,
         )
+
+        # ── A1) STREAK BANNER ────────────────────────────────────────────
+        _streak = current_prof.get('current_streak') or 0
+        if _streak >= 2:
+            st.markdown(
+                f'<div style="background:linear-gradient(135deg,#1b4332,#40916c);border-radius:12px;'
+                f'padding:14px 20px;text-align:center;color:white;margin-bottom:12px;">'
+                f'<span style="font-size:1.05rem;font-weight:700;">🔥 {_streak} week streak — keep it wild!</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        elif _streak == 1:
+            st.markdown(
+                f'<div style="border:1.5px solid #c8e6c9;border-radius:12px;'
+                f'padding:14px 20px;text-align:center;color:#2d6a4f;margin-bottom:12px;">'
+                f'<span style="font-size:1.0rem;font-weight:600;">🌱 Week 1 — you\'re just getting started</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
         # ── B) RECENT ACTIVITY ──────────────────────────────────────────
         if st.button("📋 Recent Activity", type="secondary", key="activity_toggle"):
