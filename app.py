@@ -3910,11 +3910,11 @@ else:
     def _spot_modal(saved):
         _uid  = st.session_state.user.id
         _sid  = saved['id']
-        _name = saved.get('spot_name', '')
-        _addr = saved.get('address', '')
-        _cat  = saved.get('category', '')
-        _tier = saved.get('tier_name', '')
-        _desc = saved.get('description', '')
+        _name = saved.get('spot_name') or ''
+        _addr = saved.get('address') or ''
+        _cat  = saved.get('category') or ''
+        _tier = saved.get('tier_name') or ''
+        _desc = saved.get('description') or ''
         _photo = saved.get('photo_url', '') or ''
         _web  = saved.get('website', '') or ''
         _tags_str = saved.get('matched_tags', '') or ''
@@ -3935,11 +3935,18 @@ else:
         # Photo (max-height capped to prevent overflow)
         _fallback = get_fallback_image(_cat, _desc or _tier)
         _img_src = _photo or _fallback
-        st.markdown(
-            f'<img src="{_img_src}" style="width:100%;max-height:280px;object-fit:cover;'
-            f'border-radius:8px;margin-bottom:8px;display:block;" alt="">',
-            unsafe_allow_html=True
-        )
+        if _img_src:
+            st.markdown(
+                f'<img src="{_img_src}" style="width:100%;max-height:280px;object-fit:cover;'
+                f'border-radius:8px;margin-bottom:8px;display:block;" alt="">',
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                '<div style="width:100%;height:160px;background:linear-gradient(135deg,#2d6a4f,#52b788);'
+                'border-radius:8px;margin-bottom:8px;"></div>',
+                unsafe_allow_html=True
+            )
 
         # Tier color
         _tn = _tier.lower()
