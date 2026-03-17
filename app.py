@@ -488,7 +488,6 @@ def get_profile(user_id):
 
 def get_excluded_spots(user_id):
     """Returns tiered exclusion dict: permanent, temporary (14-day), resurfaceable."""
-    _t0 = time.time()
     try:
         cutoff_14 = (datetime.utcnow() - timedelta(days=14)).isoformat()
         res = supabase.table('saved_spots').select('spot_name, rating, user_notes, saved_at').eq('user_id', user_id).execute()
@@ -504,10 +503,8 @@ def get_excluded_spots(user_id):
                 temporary.append(name)
             else:
                 resurfaceable.append(name)
-        print(f"[TIMING] get_excluded_spots: {time.time()-_t0:.2f}s")
         return {'permanent': permanent, 'temporary': temporary, 'resurfaceable': resurfaceable}
     except:
-        print(f"[TIMING] get_excluded_spots (error): {time.time()-_t0:.2f}s")
         return {'permanent': [], 'temporary': [], 'resurfaceable': []}
 
 def get_favorite_spots(user_id):
@@ -557,7 +554,6 @@ def generate_referral_code(user_id):
 
 def get_user_preference_scores(user_id):
     """Returns learned taste profile from saved/rated spots."""
-    _t0 = time.time()
     _TASTE_KEYWORDS = [
         "wine", "brewery", "bar", "coffee", "museum", "outdoor", "music",
         "comedy", "sports", "restaurant", "jazz", "cocktail", "theater", "brunch",
@@ -697,7 +693,6 @@ def get_user_preference_scores(user_id):
             if new_in_recent:
                 emerging_keyword = next(iter(new_in_recent))
 
-        print(f"[TIMING] get_user_preference_scores: {time.time()-_t0:.2f}s")
         return {
             "top_categories": top_categories,
             "top_keywords": top_keywords,
@@ -708,7 +703,6 @@ def get_user_preference_scores(user_id):
         }
     except Exception as _e:
         print(f"[WildDNA] error: {_e}")
-        print(f"[TIMING] get_user_preference_scores (error): {time.time()-_t0:.2f}s")
         return {}
 
 def save_spot_to_db(user_id, name, address, category, rating=None, notes="",
@@ -979,16 +973,12 @@ def get_state_from_coords(lat, lng):
     return None, None
 
 def get_live_weather(lat, lng):
-    _t0 = time.time()
     try:
         url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lng}&units=imperial&appid={OPENWEATHER_API_KEY}"
         res = requests.get(url, timeout=10).json()
         if res.get("cod") == 200:
-            _result = f"{res['main']['temp']}°F and {res['weather'][0]['description']}"
-            print(f"[TIMING] get_live_weather: {time.time()-_t0:.2f}s")
-            return _result
+            return f"{res['main']['temp']}°F and {res['weather'][0]['description']}"
     except: pass
-    print(f"[TIMING] get_live_weather (fallback): {time.time()-_t0:.2f}s")
     return "Weather data unavailable."
 
 def build_semantic_query(filters_dict, profile, preference_scores=None, mode=None):
@@ -1411,24 +1401,19 @@ def build_tier_queries(filters_dict, profile=None, preference_scores=None):
 def fetch_tier_places(t1_query, t2_query, t3_query, lat, lng, radius_miles):
     """Fetch 3 tiers of Places results in parallel. Returns {'tier1': [...], 'tier2': [...], 'tier3': [...]}."""
     from concurrent.futures import ThreadPoolExecutor
-    _t0 = time.time()
     threshold = radius_miles * 1.5
 
-    def _fetch(query, page_size, freshness_boost, label):
-        _tt = time.time()
+    def _fetch(query, page_size, freshness_boost):
         raw = _run_places_query(query, lat, lng, radius_miles, page_size=page_size)
-        result = _process_places(raw, lat, lng, threshold, freshness_boost=freshness_boost)
-        print(f"[TIMING] fetch_tier_places {label} ({len(result)} results): {time.time()-_tt:.2f}s")
-        return result
+        return _process_places(raw, lat, lng, threshold, freshness_boost=freshness_boost)
 
     with ThreadPoolExecutor(max_workers=3) as executor:
-        f1 = executor.submit(_fetch, t1_query, 10, False, "tier1")
-        f2 = executor.submit(_fetch, t2_query, 8,  False, "tier2")
-        f3 = executor.submit(_fetch, t3_query, 8,  True,  "tier3")  # freshness_boost flags tier 3 results
+        f1 = executor.submit(_fetch, t1_query, 10, False)
+        f2 = executor.submit(_fetch, t2_query, 8,  False)
+        f3 = executor.submit(_fetch, t3_query, 8,  True)   # freshness_boost flags tier 3 results
         tier1 = f1.result()
         tier2 = f2.result()
         tier3 = f3.result()
-    print(f"[TIMING] fetch_tier_places total (wall clock): {time.time()-_t0:.2f}s")
 
     # Deduplicate across tiers — tier1 has priority
     seen = {(p.get('displayName', {}).get('text') or '').lower() for p in tier1}
@@ -1466,7 +1451,6 @@ _TM_CLASSIFICATION_MAP = {
 }
 
 def fetch_live_events(lat, lng, radius_miles, target_date_str, specific_keyword=""):
-    _t0 = time.time()
     try:
         target_date = datetime.strptime(target_date_str, "%A, %B %d, %Y").date()
         start_dt = f"{target_date.isoformat()}T00:00:00Z"
@@ -1552,10 +1536,8 @@ def fetch_live_events(lat, lng, radius_miles, target_date_str, specific_keyword=
                 "snippet":       (ev.get('info') or ev.get('pleaseNote') or '')[:500],
             })
 
-        print(f"[TIMING] fetch_live_events ({len(results)} events): {time.time()-_t0:.2f}s")
         return results
     except:
-        print(f"[TIMING] fetch_live_events (error): {time.time()-_t0:.2f}s")
         return []
 
 def _should_show_wild_idea_teaser():
@@ -1948,7 +1930,6 @@ def render_wild_idea_card(idea, location_input, user_id):
 
 @retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3), retry=retry_if_not_exception_type(TimeoutError))
 def get_ai_recommendations(places_data, live_events_data, weather_report, filters_dict, location_name, target_date_str, relative_day, profile, excluded_spots, favorite_spots, mode="top_3", lat=None, lng=None, radius_miles=20, preference_scores=None, resurfaceable_spots=None):
-    _t0 = time.time()
     client = OpenAI(api_key=OPENAI_API_KEY)
 
     _spend_filter = filters_dict.get('spend', '💰 Moderate')
@@ -2333,7 +2314,6 @@ Return JSON with a 'recommendations' array. Each item: name, tier_name, category
         recs = result.get("recommendations") or []
         if len(recs) > 1:
             result["recommendations"] = recs[:1]
-    print(f"[TIMING] get_ai_recommendations: {time.time()-_t0:.2f}s")
     return result
 
 def match_photos_to_results(recommendations, raw_places, live_events=None, places_photo_map=None):
@@ -3067,13 +3047,16 @@ else:
             
             with loc_col1: 
                 ui_loc = st.text_input("Location", value=st.session_state.mem_loc, placeholder="Enter City or ZIP Code", label_visibility="collapsed")
-            with loc_col2: 
-                geo_data = streamlit_geolocation()
-
-            if geo_data and geo_data.get('latitude') is not None:
-                st.session_state.mem_gps_active = True
-                st.session_state.mem_geo_data = geo_data
-                st.session_state.mem_loc = ""
+            with loc_col2:
+                # Only render the component when GPS is not yet active.
+                # Once active, the component keeps firing componentValue updates
+                # on every render, causing an infinite rerun loop.
+                if not st.session_state.mem_gps_active:
+                    geo_data = streamlit_geolocation()
+                    if geo_data and geo_data.get('latitude') is not None:
+                        st.session_state.mem_gps_active = True
+                        st.session_state.mem_geo_data = geo_data
+                        st.session_state.mem_loc = ""
 
             if st.session_state.mem_gps_active:
                 st.markdown(
