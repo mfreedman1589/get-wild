@@ -4172,7 +4172,7 @@ else:
                 ) if _is_chosen else ''
                 _sub_sep = ' · ' if _category and (_stars_html or _chosen_html) else ''
 
-                col_info, col_del, col_action = st.columns([5, 0.65, 0.65])
+                col_info, col_action = st.columns([5, 1])
                 with col_info:
                     st.markdown(
                         f'<div style="padding:6px 0;">'
@@ -4183,13 +4183,6 @@ else:
                         f'</div>',
                         unsafe_allow_html=True
                     )
-                with col_del:
-                    if st.button("🗑", key=f"del_{saved['id']}", use_container_width=True,
-                                 help="Remove from ledger"):
-                        if delete_spot_from_db(saved['id']):
-                            st.session_state.saved_spots_dirty = True
-                            st.session_state.pref_scores_dirty = True
-                            st.rerun()
                 with col_action:
                     if st.button("›", key=f"view_{saved['id']}", use_container_width=True,
                                  help=f"Open {saved['spot_name']}"):
