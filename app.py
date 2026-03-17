@@ -402,6 +402,17 @@ custom_css = """
         background: rgba(200, 230, 201, 0.15) !important;
     }
     .wc-picked-for-you { font-size: 0.72rem; color: #52b788; margin: 2px 0 4px 0; }
+
+    /* Quick-rate star buttons in Saved tab — compact override */
+    .gw-qs-anchor + div .stButton > button,
+    div:has(.gw-qs-anchor) + div .stButton > button {
+        min-height: 26px !important;
+        padding: 0 4px !important;
+        font-size: 18px !important;
+        border-radius: 6px !important;
+        font-weight: 400 !important;
+    }
+
     .gw-dna-pill {
         display: inline-block; background: #e8f5e9; color: #2e7d32;
         border-radius: 20px; padding: 3px 10px; font-size: 0.78rem;
@@ -2941,7 +2952,7 @@ else:
                     st.markdown(
                         '<div style="background:#e5e7eb;color:#9ca3af;border-radius:24px;padding:10px 20px;'
                         'text-align:center;font-size:0.9rem;font-weight:600;margin-bottom:10px;user-select:none;">'
-                        '💡 Search somewhere to unlock your Wild Idea →</div>',
+                        '🌿 Enter a location first to unlock your Wild Idea 🌿</div>',
                         unsafe_allow_html=True)
 
                 elif not st.session_state.get('wild_idea_expanded'):
@@ -3028,8 +3039,8 @@ else:
                             # Generation failed — collapse to teaser
                             st.session_state.wild_idea_expanded = False
                     else:
-                        # Location resolve failed — collapse
-                        st.session_state.wild_idea_expanded = False
+                        # Location resolve failed — show message instead of collapsing
+                        st.info("📍 Couldn't resolve your location. Try entering a city name in the search field.")
             # ---- END WILD IDEA BANNER ----
 
             st.subheader("Where are we going?")
@@ -3043,10 +3054,18 @@ else:
             if geo_data and geo_data.get('latitude') is not None:
                 st.session_state.mem_gps_active = True
                 st.session_state.mem_geo_data = geo_data
-                st.session_state.mem_loc = "" 
+                st.session_state.mem_loc = ""
 
             if st.session_state.mem_gps_active:
-                st.success("🌿 GPS Locked!")
+                st.markdown(
+                    '<p style="font-size:0.8rem;color:#52b788;margin:2px 0 6px 0;">📍 Using your current location</p>',
+                    unsafe_allow_html=True
+                )
+            elif not st.session_state.get('mem_loc', ''):
+                st.markdown(
+                    '<p style="font-size:0.8rem;color:#9ca3af;margin:2px 0 6px 0;">📍 Tap → to use your current location</p>',
+                    unsafe_allow_html=True
+                )
 
             st.write("---")
 
@@ -3906,6 +3925,29 @@ else:
     with tab_saved:
         st.subheader("Your Adventure Ledger")
         st.write("Rate your past spots. Spots rated 1-star will NEVER be recommended again.")
+
+        # One-time dedup per session — silently collapse duplicate spot_name rows
+        if not st.session_state.get('dedup_done', False):
+            try:
+                from collections import defaultdict as _dd
+                _dup_res = supabase.table('saved_spots').select('id, spot_name, rating, user_notes, saved_at').eq('user_id', st.session_state.user.id).execute()
+                _name_groups = _dd(list)
+                for _s in (_dup_res.data or []):
+                    _name_groups[(_s.get('spot_name') or '').lower()].append(_s)
+                for _grp in _name_groups.values():
+                    if len(_grp) > 1:
+                        # Keep: prefer rated/noted records, then most recent saved_at
+                        _grp_sorted = sorted(
+                            _grp,
+                            key=lambda x: (x.get('rating') is not None, x.get('saved_at') or ''),
+                            reverse=True
+                        )
+                        for _del in _grp_sorted[1:]:
+                            supabase.table('saved_spots').delete().eq('id', _del['id']).execute()
+            except:
+                pass
+            st.session_state.dedup_done = True
+
         # Always re-fetch fresh from Supabase — no caching
         st.session_state.saved_spots_dirty = False
         res = supabase.table('saved_spots').select('*').eq('user_id', st.session_state.user.id).order('saved_at', desc=True).execute()
@@ -3984,14 +4026,15 @@ else:
                                  help=f"Open {saved['spot_name']}"):
                         _spot_modal(saved)
 
-                # Quick star rating row for chosen spots not yet rated
-                if _is_chosen and not _rating_val:
+                # Quick star rating row for all unrated spots
+                if not _rating_val:
+                    st.markdown('<div class="gw-qs-anchor"></div>', unsafe_allow_html=True)
                     _ql, _qs1, _qs2, _qs3, _qs4, _qs5 = st.columns([2, 1, 1, 1, 1, 1])
                     with _ql:
-                        st.caption("Quick rate:")
+                        st.caption("Rate:")
                     for _si, _sc in zip([1, 2, 3, 4, 5], [_qs1, _qs2, _qs3, _qs4, _qs5]):
                         with _sc:
-                            if st.button("★", key=f"qs_{saved['id']}_{_si}", use_container_width=True):
+                            if st.button("★", key=f"qs_{saved['id']}_{_si}", use_container_width=False):
                                 supabase.table('saved_spots').update({'rating': _si}).eq('id', saved['id']).execute()
                                 if _si == 5:
                                     award_points(st.session_state.user.id, "rating", POINTS['rate'] + POINTS['rate_perfect'], "5-star rating!")
