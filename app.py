@@ -3949,7 +3949,7 @@ else:
             )
 
         # Tier color
-        _tn = _tier.lower()
+        _tn = (_tier or '').lower()
         if _tn in {"the sure thing", "the crowd pleaser", "the local favorite", "the classic", "the reliable"}:
             _tc = "#52b788"
         elif _tn in {"the fresh take", "the curveball", "the surprise", "the interesting pick", "the plot twist"}:
@@ -4015,7 +4015,7 @@ else:
 
         st.divider()
 
-        # I'm Going
+        # I'm Going / Go Again
         if not _is_chosen:
             if st.button("✅ I'm Going", type="primary", use_container_width=True, key=f"modal_going_{_sid}"):
                 supabase.table('saved_spots').update({'user_notes': 'chosen'}).eq('id', _sid).execute()
@@ -4033,7 +4033,23 @@ else:
                 st.session_state.pref_scores_dirty = True
                 st.rerun()
         else:
-            st.success("Chosen ✓ — you went here!")
+            st.markdown(
+                '<div style="color:#2d6a4f;font-size:0.82rem;font-weight:600;margin-bottom:6px;">✓ You\'ve been here</div>',
+                unsafe_allow_html=True
+            )
+            if st.button("🔄 Go Again", type="primary", use_container_width=True, key=f"modal_goagain_{_sid}"):
+                award_points(_uid, "going", POINTS['going_top3'], f"Chose an outing: {_name}")
+                check_and_award_badges(_uid)
+                _vc = get_visit_count(_uid, _name)
+                if _vc == 3:
+                    st.toast(f"🌟 You're becoming a regular at {_name}!")
+                    award_points(_uid, 'milestone', 5, f"Regular at {_name}")
+                elif _vc == 5:
+                    st.toast(f"👑 Local Legend unlocked: {_name}!")
+                    award_points(_uid, 'milestone', 10, f"Local Legend: {_name}")
+                st.toast("Welcome back! 🌿")
+                st.session_state.pref_scores_dirty = True
+                st.rerun()
 
         st.divider()
 
