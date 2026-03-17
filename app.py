@@ -2283,6 +2283,16 @@ RULES:
 
 Return JSON with a 'recommendations' array. Each item: name, tier_name, category, address (exact), why_its_perfect (2-3 sentences), vibe_check (3 words), matched_tags (2-3 short descriptor strings, always required — e.g. "cozy", "date night", "craft cocktails"; if a specific keyword was given it MUST appear in matched_tags), website, reservations_url (if you have high confidence this specific venue accepts reservations on OpenTable or Resy, return the direct venue booking URL — otherwise null; do not guess or construct search URLs), lat, lng, spontaneity_score (integer 1-10 using this strict rubric — DO NOT inflate scores: 1-2=mainstream chain or famous landmark everyone knows (Smithsonian, Cheesecake Factory, Central Park); 3-4=solid local spot most people have heard of or would immediately think to Google (neighborhood brewery, popular brunch spot, well-known hiking trail); 5-6=genuinely interesting find that most people wouldn't think of themselves but is easy to enjoy (rooftop bar with no reservations needed, lesser-known gallery, unique food hall); 7-8=surprisingly unconventional or hard-to-discover — requires insider knowledge or creative thinking (hidden speakeasy, axe throwing bar, ceramics class, underground supper club); 9-10=truly rare, unexpected, or brand-new — most locals haven't heard of it yet (pop-up experience, brand-new venue in soft opening, extremely niche activity). A small local museum scores 3-4. A neighborhood park scores 2-3. A bowling alley scores 5. Axe throwing scores 7. A brand-new pop-up art installation scores 9.)"""
 
+    # --- TEMPORARY DIAGNOSTIC PRINTS ---
+    if _is_tiered:
+        print(f"[DEBUG] tier1 raw: {len(places_data.get('tier1', []))}  filtered→GPT: {len(trimmed_t1)}")
+        print(f"[DEBUG] tier2 raw: {len(places_data.get('tier2', []))}  filtered→GPT: {len(trimmed_t2)}")
+        print(f"[DEBUG] tier3 raw: {len(places_data.get('tier3', []))}  filtered→GPT: {len(trimmed_t3)}")
+        print(f"[DEBUG] candidates sent to GPT: {len(trimmed_t1 + trimmed_t2 + trimmed_t3)}")
+    print(f"[DEBUG] excluded spots total: {len(excluded_spots or [])}")
+    print(f"[DEBUG] mode: {mode}")
+    # --- END DIAGNOSTIC ---
+
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
