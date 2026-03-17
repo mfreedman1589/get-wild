@@ -443,6 +443,7 @@ if 'current_results' not in st.session_state: st.session_state.current_results =
 if 'current_mode' not in st.session_state: st.session_state.current_mode = None
 if 'session_seen_spots' not in st.session_state: st.session_state.session_seen_spots = []
 if 'search_active' not in st.session_state: st.session_state.search_active = False
+if '_scrolled_to_top' not in st.session_state: st.session_state._scrolled_to_top = False
 if 'trigger_fetch' not in st.session_state: st.session_state.trigger_fetch = False
 if 'saved_spots_dirty' not in st.session_state: st.session_state.saved_spots_dirty = False
 if 'fetch_timed_out' not in st.session_state: st.session_state.fetch_timed_out = False
@@ -2253,6 +2254,8 @@ def get_ai_recommendations(places_data, live_events_data, weather_report, filter
 
     system_prompt = f"""You are a local concierge for 'Get Wild'.
 
+CRITICAL: You MUST return exactly 3 recommendations in the recommendations array. Never return fewer than 3. If you cannot find 3 perfect matches, return your 3 best available options from the candidates provided. Returning fewer than 3 is an error.
+
 CONTEXT: {location_name} | {weather_report} | {target_date_str} ({relative_day}) | {filters_dict['time']} | {filters_dict['group']}, {filters_dict['food']}, {filters_dict['vibe']}
 {profile_context}{taste_context}
 {blacklist_context}{resurfaceable_context}
@@ -2283,15 +2286,6 @@ RULES:
 
 Return JSON with a 'recommendations' array. Each item: name, tier_name, category, address (exact), why_its_perfect (2-3 sentences), vibe_check (3 words), matched_tags (2-3 short descriptor strings, always required — e.g. "cozy", "date night", "craft cocktails"; if a specific keyword was given it MUST appear in matched_tags), website, reservations_url (if you have high confidence this specific venue accepts reservations on OpenTable or Resy, return the direct venue booking URL — otherwise null; do not guess or construct search URLs), lat, lng, spontaneity_score (integer 1-10 using this strict rubric — DO NOT inflate scores: 1-2=mainstream chain or famous landmark everyone knows (Smithsonian, Cheesecake Factory, Central Park); 3-4=solid local spot most people have heard of or would immediately think to Google (neighborhood brewery, popular brunch spot, well-known hiking trail); 5-6=genuinely interesting find that most people wouldn't think of themselves but is easy to enjoy (rooftop bar with no reservations needed, lesser-known gallery, unique food hall); 7-8=surprisingly unconventional or hard-to-discover — requires insider knowledge or creative thinking (hidden speakeasy, axe throwing bar, ceramics class, underground supper club); 9-10=truly rare, unexpected, or brand-new — most locals haven't heard of it yet (pop-up experience, brand-new venue in soft opening, extremely niche activity). A small local museum scores 3-4. A neighborhood park scores 2-3. A bowling alley scores 5. Axe throwing scores 7. A brand-new pop-up art installation scores 9.)"""
 
-    # --- TEMPORARY DIAGNOSTIC PRINTS ---
-    if _is_tiered:
-        print(f"[DEBUG] tier1 raw: {len(places_data.get('tier1', []))}  filtered→GPT: {len(trimmed_t1)}")
-        print(f"[DEBUG] tier2 raw: {len(places_data.get('tier2', []))}  filtered→GPT: {len(trimmed_t2)}")
-        print(f"[DEBUG] tier3 raw: {len(places_data.get('tier3', []))}  filtered→GPT: {len(trimmed_t3)}")
-        print(f"[DEBUG] candidates sent to GPT: {len(trimmed_t1 + trimmed_t2 + trimmed_t3)}")
-    print(f"[DEBUG] excluded spots total: {len(excluded_spots or [])}")
-    print(f"[DEBUG] mode: {mode}")
-    # --- END DIAGNOSTIC ---
 
     try:
         response = client.chat.completions.create(
@@ -3232,6 +3226,7 @@ else:
                         "outdoor_vibe": ui_outdoor_vibe,
                     }
                     st.session_state.search_active = True
+                    st.session_state._scrolled_to_top = False
                     st.session_state.trigger_fetch = True
                     st.session_state.is_loading = True
                     st.session_state.session_seen_spots = []
@@ -3242,10 +3237,13 @@ else:
 
         # --- SCREEN 2: THE RESULTS & LOADER ---
         else:
-            scroll_to_top()
-            
+            if not st.session_state._scrolled_to_top:
+                scroll_to_top()
+                st.session_state._scrolled_to_top = True
+
             if st.button("← Start a Fresh Search"):
                 st.session_state.search_active = False
+                st.session_state._scrolled_to_top = False
                 st.session_state.current_results = None
                 st.session_state.is_loading = False
                 st.session_state.session_seen_spots = []
