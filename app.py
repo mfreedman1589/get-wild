@@ -3068,7 +3068,7 @@ else:
             loc_col1, loc_col2 = st.columns([5, 1])
             
             with loc_col1: 
-                ui_loc = st.text_input("Location", placeholder="Enter City or ZIP Code", label_visibility="collapsed", key="mem_loc")
+                ui_loc = st.text_input("Location", value=st.session_state.mem_loc, placeholder="Enter City or ZIP Code", label_visibility="collapsed")
             with loc_col2:
                 # Only render the component when GPS is not yet active.
                 # Once active, the component keeps firing componentValue updates
@@ -4064,29 +4064,11 @@ else:
                         unsafe_allow_html=True
                     )
                 with col_del:
-                    _confirm_key = f"delete_confirm_{saved['id']}"
-                    _confirm_time_key = f"delete_confirm_time_{saved['id']}"
-                    _is_armed = st.session_state.get(_confirm_key)
-                    # Auto-disarm after 5 seconds
-                    if _is_armed and time.time() - st.session_state.get(_confirm_time_key, 0) > 5:
-                        st.session_state.pop(_confirm_key, None)
-                        st.session_state.pop(_confirm_time_key, None)
-                        _is_armed = False
-                    if _is_armed:
-                        if st.button("✓", key=f"del_yes_{saved['id']}", use_container_width=True,
-                                     help="Confirm remove"):
-                            supabase.table('saved_spots').delete().eq('id', saved['id']).execute()
-                            st.session_state.pop(_confirm_key, None)
-                            st.session_state.pop(_confirm_time_key, None)
+                    if st.button("🗑", key=f"del_{saved['id']}", use_container_width=True,
+                                 help="Remove from ledger"):
+                        if delete_spot_from_db(saved['id']):
                             st.session_state.saved_spots_dirty = True
                             st.session_state.pref_scores_dirty = True
-                            st.toast(f"Removed {saved['spot_name']}")
-                            st.rerun()
-                    else:
-                        if st.button("🗑", key=f"del_{saved['id']}", use_container_width=True,
-                                     help="Remove from ledger"):
-                            st.session_state[_confirm_key] = True
-                            st.session_state[_confirm_time_key] = time.time()
                             st.rerun()
                 with col_action:
                     if st.button("›", key=f"view_{saved['id']}", use_container_width=True,
@@ -4095,16 +4077,23 @@ else:
 
                 # Quick star rating for all unrated spots
                 if not _rating_val:
-                    _fb = st.feedback("stars", key=f"rate_{saved['id']}")
-                    if _fb is not None:
-                        _stars = _fb + 1  # st.feedback returns 0-4; convert to 1-5
-                        supabase.table('saved_spots').update({'rating': _stars}).eq('id', saved['id']).execute()
-                        if _stars == 5:
+                    _sid = saved['id']
+                    def _do_rate(sid=_sid):
+                        _v = st.session_state.get(f"rate_slider_{sid}", 1)
+                        supabase.table('saved_spots').update({'rating': _v}).eq('id', sid).execute()
+                        if _v == 5:
                             award_points(st.session_state.user.id, "rating", POINTS['rate'] + POINTS['rate_perfect'], "5-star rating!")
-                        elif _stars >= 4:
+                        elif _v >= 4:
                             award_points(st.session_state.user.id, "rating", POINTS['rate'], "Rated a visit")
-                        if _stars >= 4:
+                        if _v >= 4:
                             check_and_award_badges(st.session_state.user.id)
-                        st.toast(f"Rated {_stars}⭐")
+                        st.toast(f"Rated {_v}⭐")
                         st.session_state.pref_scores_dirty = True
-                        st.rerun()
+                    st.select_slider(
+                        "Rate",
+                        options=[1, 2, 3, 4, 5],
+                        format_func=lambda x: "⭐" * x,
+                        key=f"rate_slider_{_sid}",
+                        on_change=_do_rate,
+                        label_visibility="collapsed"
+                    )
