@@ -1408,9 +1408,9 @@ def fetch_tier_places(t1_query, t2_query, t3_query, lat, lng, radius_miles):
         return _process_places(raw, lat, lng, threshold, freshness_boost=freshness_boost)
 
     with ThreadPoolExecutor(max_workers=3) as executor:
-        f1 = executor.submit(_fetch, t1_query, 15, False)
-        f2 = executor.submit(_fetch, t2_query, 15, False)
-        f3 = executor.submit(_fetch, t3_query, 15, True)   # freshness_boost flags tier 3 results
+        f1 = executor.submit(_fetch, t1_query, 10, False)
+        f2 = executor.submit(_fetch, t2_query, 8,  False)
+        f3 = executor.submit(_fetch, t3_query, 8,  True)   # freshness_boost flags tier 3 results
         tier1 = f1.result()
         tier2 = f2.result()
         tier3 = f3.result()
@@ -1454,7 +1454,9 @@ def fetch_live_events(lat, lng, radius_miles, target_date_str, specific_keyword=
     try:
         target_date = datetime.strptime(target_date_str, "%A, %B %d, %Y").date()
         start_dt = f"{target_date.isoformat()}T00:00:00Z"
-        end_dt   = f"{(target_date + timedelta(days=1)).isoformat()}T00:00:00Z"
+        # Extend window 2 full UTC days to capture late-night events in any US timezone;
+        # date_verified below filters to only events whose localDate matches target_date.
+        end_dt   = f"{(target_date + timedelta(days=2)).isoformat()}T00:00:00Z"
 
         kw_lower = (specific_keyword or "").lower().strip()
         classification, extra_keyword = _TM_CLASSIFICATION_MAP.get(kw_lower, (None, None))
@@ -1466,7 +1468,7 @@ def fetch_live_events(lat, lng, radius_miles, target_date_str, specific_keyword=
             "unit":          "miles",
             "startDateTime": start_dt,
             "endDateTime":   end_dt,
-            "size":          5,
+            "size":          10,
             "countryCode":   "US",
             "sort":          "relevance,desc",
         }
@@ -1528,7 +1530,7 @@ def fetch_live_events(lat, lng, radius_miles, target_date_str, specific_keyword=
                 "venue_address": venue_address,
                 "date_str":      date_label,
                 "start_time":    start_time,
-                "date_verified": True,
+                "date_verified": local_date == target_date.isoformat(),
                 "url":           ev.get('url', ''),
                 "image_url":     image_url,
                 "snippet":       (ev.get('info') or ev.get('pleaseNote') or '')[:500],
