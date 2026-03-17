@@ -11,7 +11,7 @@ import pandas as pd
 import pydeck as pdk
 import time
 from openai import OpenAI
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from streamlit_geolocation import streamlit_geolocation
 from supabase import create_client, Client
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_not_exception_type
@@ -492,7 +492,7 @@ def get_profile(user_id):
 def get_excluded_spots(user_id):
     """Returns tiered exclusion dict: permanent, temporary (14-day), resurfaceable."""
     try:
-        cutoff_14 = (datetime.utcnow() - timedelta(days=14)).isoformat()
+        cutoff_14 = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=14)).isoformat()
         res = supabase.table('saved_spots').select('spot_name, rating, user_notes, saved_at').eq('user_id', user_id).execute()
         permanent, temporary, resurfaceable = [], [], []
         for s in (res.data or []):
@@ -521,7 +521,7 @@ def update_streak(user_id):
     """Update weekly outing streak after 'I'm Going'. Call once per going action."""
     try:
         from datetime import timedelta
-        _now = datetime.utcnow()
+        _now = datetime.now(timezone.utc).replace(tzinfo=None)
         _current_week = _now.strftime('%G-W%V')
         _last_week    = (_now - timedelta(weeks=1)).strftime('%G-W%V')
         res = supabase.table('user_profiles').select('current_streak, last_outing_week').eq('id', user_id).execute()
@@ -746,7 +746,7 @@ def save_spot_to_db(user_id, name, address, category, rating=None, notes="",
             'category':     category,
             'rating':       rating,
             'user_notes':   notes,
-            'saved_at':     datetime.utcnow().isoformat(),
+            'saved_at':     datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             'mode':         mode or '',
             'group_type':   group_type or '',
             'setting':      setting or '',
@@ -917,14 +917,14 @@ def submit_feedback(user_id, comment):
 
 def increment_wild_counter(city):
     try:
-        today = datetime.utcnow().date().isoformat()
+        today = datetime.now(timezone.utc).replace(tzinfo=None).date().isoformat()
         supabase.rpc('increment_wild_counter', {'p_date': today, 'p_city': city}).execute()
     except:
         pass
 
 def get_wild_count_today():
     try:
-        today = datetime.utcnow().date().isoformat()
+        today = datetime.now(timezone.utc).replace(tzinfo=None).date().isoformat()
         res = supabase.table('wild_counter').select('count').eq('search_date', today).execute()
         if res.data:
             return sum(row['count'] for row in res.data)
@@ -955,9 +955,9 @@ def get_local_target_date(lat, lng, day_choice):
             local_timestamp = timestamp + res['dstOffset'] + res['rawOffset']
             local_time = datetime.utcfromtimestamp(local_timestamp)
         else:
-            local_time = datetime.utcnow()
+            local_time = datetime.now(timezone.utc).replace(tzinfo=None)
     except:
-        local_time = datetime.utcnow()
+        local_time = datetime.now(timezone.utc).replace(tzinfo=None)
         
     if "Tomorrow" in day_choice:
         target_date = local_time + timedelta(days=1)
@@ -1558,7 +1558,7 @@ def _should_generate_wild_idea(user_profile):
     if last_str:
         try:
             last_dt = datetime.fromisoformat(last_str[:19])
-            if datetime.utcnow() - last_dt < timedelta(hours=4):
+            if datetime.now(timezone.utc).replace(tzinfo=None) - last_dt < timedelta(hours=4):
                 return False
         except:
             pass
@@ -1568,7 +1568,7 @@ def _dismiss_wild_idea(user_id):
     st.session_state.wild_idea_dismissed = True
     try:
         supabase.table('user_profiles').update(
-            {'last_wild_idea_at': datetime.utcnow().isoformat()}
+            {'last_wild_idea_at': datetime.now(timezone.utc).replace(tzinfo=None).isoformat()}
         ).eq('id', user_id).execute()
     except:
         pass
@@ -1585,9 +1585,9 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
                 _local_ts = _ts + _tz_res['dstOffset'] + _tz_res['rawOffset']
                 h = datetime.utcfromtimestamp(_local_ts).hour
             else:
-                h = datetime.utcnow().hour
+                h = datetime.now(timezone.utc).replace(tzinfo=None).hour
         except:
-            h = datetime.utcnow().hour
+            h = datetime.now(timezone.utc).replace(tzinfo=None).hour
         if 6 <= h < 12:       time_context = "morning"
         elif 12 <= h < 17:    time_context = "afternoon"
         elif 17 <= h < 21:    time_context = "evening"
@@ -2948,7 +2948,7 @@ else:
 
         # Streak-at-risk: Sunday + haven't gone out this week + streak > 1
         try:
-            _now_local = datetime.utcnow()
+            _now_local = datetime.now(timezone.utc).replace(tzinfo=None)
             if _now_local.weekday() == 6:  # Sunday
                 _cw = _now_local.strftime('%G-W%V')
                 _up = user_profile or {}
@@ -3330,7 +3330,7 @@ else:
                         )
                         cached_result = None
                         try:
-                            cutoff = (datetime.utcnow() - timedelta(hours=2)).isoformat()
+                            cutoff = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=2)).isoformat()
                             rows = supabase.table('recommendation_cache').select('result_json').eq('cache_key', cache_key).gte('created_at', cutoff).limit(1).execute()
                             if rows.data:
                                 cached_result = json.loads(rows.data[0]['result_json'])
@@ -3390,7 +3390,7 @@ else:
                                 supabase.table('recommendation_cache').insert({
                                     'cache_key': cache_key,
                                     'result_json': json.dumps(st.session_state.current_results),
-                                    'created_at': datetime.utcnow().isoformat()
+                                    'created_at': datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
                                 }).execute()
                             except:
                                 pass
@@ -3539,7 +3539,7 @@ else:
             if not _ledger:
                 st.caption("No activity yet — get out there! 🌿")
             else:
-                _now = datetime.utcnow()
+                _now = datetime.now(timezone.utc).replace(tzinfo=None)
                 for _row in _ledger:
                     _pts  = _row.get('points_earned', 0)
                     _desc = _row.get('description', '')
@@ -4000,7 +4000,7 @@ else:
         else:
             # Rating nudge for spots marked "I'm Going" but not yet rated
             try:
-                cutoff = (datetime.utcnow() - timedelta(hours=12)).isoformat()
+                cutoff = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=12)).isoformat()
                 nudge_res = supabase.table('saved_spots').select('*')\
                     .eq('user_id', st.session_state.user.id)\
                     .eq('user_notes', 'chosen')\
