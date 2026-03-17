@@ -489,6 +489,8 @@ if st.session_state.mem_spend in _spend_migrate:
 if 'mem_spec' not in st.session_state: st.session_state.mem_spec = ""
 if 'mem_gps_active' not in st.session_state: st.session_state.mem_gps_active = False
 if 'mem_geo_data' not in st.session_state: st.session_state.mem_geo_data = None
+if 'mem_lat' not in st.session_state: st.session_state.mem_lat = None
+if 'mem_lng' not in st.session_state: st.session_state.mem_lng = None
 
 def get_profile(user_id):
     try:
@@ -3038,7 +3040,10 @@ else:
 
             # ---- HERE'S A WILD IDEA BANNER ----
             if _should_show_wild_idea_teaser():
-                _has_location = st.session_state.get('mem_gps_active') or bool(st.session_state.get('mem_loc', ''))
+                _has_location = (
+                    st.session_state.get('mem_lat') is not None or
+                    bool(st.session_state.get('mem_loc', '').strip())
+                )
 
                 if not _has_location:
                     # Greyed out — no location yet
@@ -3154,7 +3159,10 @@ else:
                     if geo_data and geo_data.get('latitude') is not None:
                         st.session_state.mem_gps_active = True
                         st.session_state.mem_geo_data = geo_data
+                        st.session_state.mem_lat = geo_data['latitude']
+                        st.session_state.mem_lng = geo_data['longitude']
                         st.session_state.mem_loc = ""
+                        st.rerun()
 
             if st.session_state.mem_gps_active:
                 st.markdown(
