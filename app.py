@@ -142,6 +142,13 @@ BADGES = [
     {'id': 'wildfire',    'name': 'Wildfire',            'emoji': '🔥', 'pts': 75,
      'desc': '10 friends sign up via your link',
      'check': lambda s: s['referral_count'] >= 10},
+    # Loyalty
+    {'id': 'local_legend', 'name': 'Local Legend',        'emoji': '👑', 'pts': 15,
+     'desc': 'Visit the same spot 5 times',
+     'check': lambda s: s.get('max_spot_visits', 0) >= 5},
+    {'id': 'scene_master', 'name': 'Scene Master',         'emoji': '🏆', 'pts': 30,
+     'desc': 'Become a Local Legend at 3 different spots',
+     'check': lambda s: s.get('legend_spot_count', 0) >= 3},
 ]
 
 GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
@@ -664,6 +671,23 @@ def get_user_preference_scores(user_id):
             for cat, ratings in cat_ratings.items()
         }
         top_categories = sorted(cat_scores, key=cat_scores.get, reverse=True)[:3]
+        # Extra weight (3x) for keywords from spots visited 3+ times
+        _visit_map = {}
+        try:
+            _vc_data = get_all_visit_counts(user_id)
+            for _vspot, _vcnt in _vc_data.items():
+                if _vcnt >= 3:
+                    for _s in spots:
+                        if (_s.get('spot_name') or '').lower() == _vspot.lower():
+                            _stags = (_s.get('matched_tags') or '').lower()
+                            _scat = (_s.get('category') or '').lower()
+                            for kw in _TASTE_KEYWORDS:
+                                if kw in (_stags + ' ' + _scat):
+                                    kw_counts[kw] += 2  # +2 extra on top of 1 normal = 3x weight
+            _visit_map = _vc_data
+        except:
+            pass
+
         top_keywords = sorted(kw_counts, key=kw_counts.get, reverse=True)
         top_keywords = [kw for kw in top_keywords if kw_counts[kw] >= _kw_threshold and kw not in _GENERIC_STOP]
         avoid_keywords = [kw for kw in sorted(avoid_kw_counts, key=avoid_kw_counts.get, reverse=True)
@@ -698,6 +722,7 @@ def get_user_preference_scores(user_id):
             if new_in_recent:
                 emerging_keyword = next(iter(new_in_recent))
 
+        _goto_spots = [n for n, c in sorted(_visit_map.items(), key=lambda x: -x[1]) if c >= 3][:5]
         return {
             "top_categories": top_categories,
             "top_keywords": top_keywords,
@@ -705,6 +730,7 @@ def get_user_preference_scores(user_id):
             "rated_count": len([s for s in spots if (s.get('rating') or 0) >= 4]),
             "total_spots": total_spots,
             "emerging_keyword": emerging_keyword,
+            "goto_spots": _goto_spots,
         }
     except Exception as _e:
         print(f"[WildDNA] error: {_e}")
@@ -803,6 +829,34 @@ def award_points(user_id, action_type, points, description):
     except:
         return None
 
+def get_visit_count(user_id, spot_name):
+    """Count how many times user chose a specific spot (via points_ledger going entries)."""
+    try:
+        res = supabase.table('points_ledger').select('id', count='exact') \
+            .eq('user_id', user_id).eq('action_type', 'going') \
+            .ilike('description', f'%{spot_name}%').execute()
+        return res.count or 0
+    except:
+        return 0
+
+def get_all_visit_counts(user_id):
+    """Returns {spot_name: visit_count} for all spots with 2+ going entries."""
+    try:
+        res = supabase.table('points_ledger').select('description') \
+            .eq('user_id', user_id).eq('action_type', 'going').execute()
+        counts = {}
+        for row in (res.data or []):
+            desc = (row.get('description') or '').strip()
+            for prefix in ['Chose an outing: ', '🎲 Wild Idea: ', '🎲 GET WILD: ']:
+                if desc.startswith(prefix):
+                    spot = desc[len(prefix):].strip()
+                    if spot:
+                        counts[spot] = counts.get(spot, 0) + 1
+                    break
+        return {k: v for k, v in counts.items() if v >= 2}
+    except:
+        return {}
+
 def get_user_badge_stats(user_id):
     """Query saved_spots and compute all badge-check stats. Returns dict with 0s on failure."""
     _zero = {k: 0 for k in [
@@ -810,7 +864,7 @@ def get_user_badge_stats(user_id):
         'rated_dining_4plus', 'wine_saves', 'brewery_saves', 'coffee_saves',
         'splurge_chosen', 'date_chosen', 'family_chosen', 'friends_chosen',
         'outdoor_chosen', 'hidden_gem_saves', 'culture_saves', 'event_chosen',
-        'free_chosen', 'referral_count',
+        'free_chosen', 'referral_count', 'max_spot_visits', 'legend_spot_count',
     ]}
     try:
         spots = supabase.table('saved_spots').select('*').eq('user_id', user_id).execute().data or []
@@ -846,6 +900,11 @@ def get_user_badge_stats(user_id):
             stats['referral_count'] = supabase.rpc('get_referral_count', {'p_referral_code': _code}).execute().data or 0
         except:
             stats['referral_count'] = 0
+
+        # Visit loyalty stats
+        _vc_all = get_all_visit_counts(user_id)
+        stats['max_spot_visits'] = max(_vc_all.values(), default=0)
+        stats['legend_spot_count'] = sum(1 for v in _vc_all.values() if v >= 5)
 
         return stats
     except:
@@ -1911,8 +1970,15 @@ def render_wild_idea_card(idea, location_input, user_id):
                 save_spot_to_db(user_id, name, address, category, notes="chosen", **_wi_ctx)
                 update_streak(user_id)
                 st.toast("💡 Wild Idea accepted! Go make a memory.")
-                award_points(user_id, "going", POINTS['wild_idea'], f"🎲 Wild Idea accepted! +{POINTS['wild_idea']} points")
+                award_points(user_id, "going", POINTS['wild_idea'], f"🎲 Wild Idea: {name}")
                 check_and_award_badges(user_id)
+                _vc = get_visit_count(user_id, name)
+                if _vc == 3:
+                    st.toast(f"🌟 You're becoming a regular at {name}!")
+                    award_points(user_id, 'milestone', 5, f"Regular at {name}")
+                elif _vc == 5:
+                    st.toast(f"👑 Local Legend unlocked: {name}!")
+                    award_points(user_id, 'milestone', 10, f"Local Legend: {name}")
                 st.session_state.pref_scores_dirty = True
                 st.session_state.wild_idea_expanded = False
                 st.rerun()
@@ -2026,6 +2092,8 @@ def get_ai_recommendations(places_data, live_events_data, weather_report, filter
         _parts = []
         if _kws: _parts.append(f"Consistently enjoys: {', '.join(_kws)}")
         if _cats: _parts.append(f"Top rated categories: {', '.join(_cats)}")
+        _goto = preference_scores.get('goto_spots') or []
+        if _goto: _parts.append(f"Repeatedly visits (3+ times): {', '.join(_goto[:3])} — recommend similar venues")
         if _parts:
             taste_context = (
                 f"\nUSER TASTE PROFILE (learned from {_count} saved spots):\n"
@@ -2681,8 +2749,16 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
                 _going_msg = "🎲 Wild choice! Have an incredible time." if mode == 'get_wild' else "✅ Let's go! Have an amazing time."
                 st.toast(_going_msg)
                 _gpts = POINTS['going_wild'] if mode == 'get_wild' else POINTS['going_top3']
-                award_points(user_id, "going", _gpts, "Chose an outing")
+                _going_desc = f"🎲 GET WILD: {spot['name']}" if mode == 'get_wild' else f"Chose an outing: {spot['name']}"
+                award_points(user_id, "going", _gpts, _going_desc)
                 check_and_award_badges(user_id)
+                _vc = get_visit_count(user_id, spot['name'])
+                if _vc == 3:
+                    st.toast(f"🌟 You're becoming a regular at {spot['name']}!")
+                    award_points(user_id, 'milestone', 5, f"Regular at {spot['name']}")
+                elif _vc == 5:
+                    st.toast(f"👑 Local Legend unlocked: {spot['name']}!")
+                    award_points(user_id, 'milestone', 10, f"Local Legend: {spot['name']}")
                 st.session_state.pref_scores_dirty = True
         with col3:
             if st.button("👎 Not for me", key=f"nope_{index}_{spot['name']}", use_container_width=True, help="Never suggest this again"):
@@ -3784,6 +3860,9 @@ else:
                 st.markdown(f'<div style="margin-bottom:6px;">🚫 You tend to skip: {_pills}</div>', unsafe_allow_html=True)
             if _dna_emerging:
                 st.markdown(f'<p style="color:#5a8a6a;font-size:0.85rem;font-style:italic;margin-top:4px;">🌿 Something new is entering your radar: {_dna_emerging}</p>', unsafe_allow_html=True)
+            _dna_gotos = (_dna_scores.get('goto_spots') or [])[:4]
+            if _dna_gotos:
+                st.markdown(f'<div style="margin-bottom:6px;">🔁 You keep coming back to: {", ".join(_dna_gotos)}</div>', unsafe_allow_html=True)
             if len(_dna_kws) < 4:
                 st.markdown('<p style="color:#9ca3af;font-size:0.82rem;margin-top:4px;">Save and rate more spots to unlock your full Wild DNA 🧬</p>', unsafe_allow_html=True)
         elif _dna_total:
@@ -3842,6 +3921,16 @@ else:
         _rating = saved.get('rating') or 0
         _notes  = saved.get('user_notes', '') or ''
         _is_chosen = 'chosen' in _notes.lower()
+
+        _visit_count = get_visit_count(_uid, _name)
+        if _visit_count >= 5:
+            _visit_html = f'<div style="color:#2d6a4f;font-size:0.78rem;font-weight:600;margin-top:2px;">👑 Local Legend — Visited {_visit_count} times</div>'
+        elif _visit_count >= 3:
+            _visit_html = f'<div style="color:#2d6a4f;font-size:0.78rem;font-weight:600;margin-top:2px;">🌟 You\'re a regular! Visited {_visit_count} times</div>'
+        elif _visit_count == 2:
+            _visit_html = '<div style="color:#52b788;font-size:0.78rem;margin-top:2px;">Visited twice ✓✓</div>'
+        else:
+            _visit_html = ''
 
         # Photo (max-height capped to prevent overflow)
         _fallback = get_fallback_image(_cat, _desc or _tier)
@@ -3908,6 +3997,7 @@ else:
             f'{_tier_badge}'
             f'<div class="wc-name" style="margin-top:6px;">{_name}</div>'
             f'<div class="wc-meta">{_cat}</div>'
+            f'{_visit_html}'
             f'<div class="wc-address">📍 {_addr}</div>'
             f'{_util_html}'
             f'<hr class="wc-hr">'
@@ -3923,8 +4013,15 @@ else:
             if st.button("✅ I'm Going", type="primary", use_container_width=True, key=f"modal_going_{_sid}"):
                 supabase.table('saved_spots').update({'user_notes': 'chosen'}).eq('id', _sid).execute()
                 update_streak(_uid)
-                award_points(_uid, "going", POINTS['going_top3'], "Chose an outing")
+                award_points(_uid, "going", POINTS['going_top3'], f"Chose an outing: {_name}")
                 check_and_award_badges(_uid)
+                _vc = get_visit_count(_uid, _name)
+                if _vc == 3:
+                    st.toast(f"🌟 You're becoming a regular at {_name}!")
+                    award_points(_uid, 'milestone', 5, f"Regular at {_name}")
+                elif _vc == 5:
+                    st.toast(f"👑 Local Legend unlocked: {_name}!")
+                    award_points(_uid, 'milestone', 10, f"Local Legend: {_name}")
                 st.toast("✅ Let's go! Have an amazing time.")
                 st.session_state.pref_scores_dirty = True
                 st.rerun()
