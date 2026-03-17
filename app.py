@@ -475,10 +475,26 @@ def get_profile(user_id):
     except: return None
 
 def get_excluded_spots(user_id):
+    """Returns tiered exclusion dict: permanent, temporary (30-day), resurfaceable."""
     try:
-        res = supabase.table('saved_spots').select('spot_name').eq('user_id', user_id).execute()
-        return [spot['spot_name'] for spot in res.data] if res.data else []
-    except: return []
+        cutoff_30 = (datetime.utcnow() - timedelta(days=30)).isoformat()
+        res = supabase.table('saved_spots').select('spot_name, rating, user_notes, saved_at').eq('user_id', user_id).execute()
+        permanent, temporary, resurfaceable = [], [], []
+        for s in (res.data or []):
+            name = s.get('spot_name') or ''
+            rating = s.get('rating') or 0
+            notes = (s.get('user_notes') or '').lower()
+            saved_at = s.get('saved_at') or ''
+            is_chosen = 'chosen' in notes
+            if rating == 1 or notes == 'rejected_wild_idea' or (is_chosen and rating >= 3):
+                permanent.append(name)
+            elif saved_at > cutoff_30:
+                temporary.append(name)
+            else:
+                resurfaceable.append(name)
+        return {'permanent': permanent, 'temporary': temporary, 'resurfaceable': resurfaceable}
+    except:
+        return {'permanent': [], 'temporary': [], 'resurfaceable': []}
 
 def get_favorite_spots(user_id):
     try:
@@ -688,6 +704,23 @@ def save_spot_to_db(user_id, name, address, category, rating=None, notes="",
             pre_count = res.count or 0
         except:
             pass
+
+        # Deduplicate: update existing record instead of inserting a second one
+        try:
+            _existing = supabase.table('saved_spots').select('id').eq('user_id', user_id).ilike('spot_name', name).execute()
+        except:
+            _existing = None
+        if _existing and _existing.data:
+            _eid = _existing.data[0]['id']
+            _upd = {'mode': mode or '', 'tier_name': tier_name or '', 'matched_tags': matched_tags or ''}
+            if rating is not None: _upd['rating'] = rating
+            if notes: _upd['user_notes'] = notes
+            if photo_url: _upd['photo_url'] = photo_url
+            if description: _upd['description'] = description
+            if website: _upd['website'] = website
+            supabase.table('saved_spots').update(_upd).eq('id', _eid).execute()
+            st.toast("Already in your ledger — updated! 📍")
+            return pre_count
 
         supabase.table('saved_spots').insert({
             'user_id':      user_id,
@@ -1882,7 +1915,7 @@ def render_wild_idea_card(idea, location_input, user_id):
 # Eventbrite introduces a new discovery API.
 
 @retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3), retry=retry_if_not_exception_type(TimeoutError))
-def get_ai_recommendations(places_data, live_events_data, weather_report, filters_dict, location_name, target_date_str, relative_day, profile, excluded_spots, favorite_spots, mode="top_3", lat=None, lng=None, radius_miles=20, preference_scores=None):
+def get_ai_recommendations(places_data, live_events_data, weather_report, filters_dict, location_name, target_date_str, relative_day, profile, excluded_spots, favorite_spots, mode="top_3", lat=None, lng=None, radius_miles=20, preference_scores=None, resurfaceable_spots=None):
     client = OpenAI(api_key=OPENAI_API_KEY)
 
     _spend_filter = filters_dict.get('spend', '💰 Moderate')
@@ -1960,6 +1993,12 @@ def get_ai_recommendations(places_data, live_events_data, weather_report, filter
         f"They are BANNED from your output. Do NOT recommend them under any circumstances: "
         f"{', '.join(excluded_spots)}"
     ) if excluded_spots else ""
+
+    resurfaceable_context = (
+        f"\nPREVIOUSLY SAVED (eligible for resurfacing): {', '.join((resurfaceable_spots or [])[:10])}. "
+        "These venues were saved by the user more than 30 days ago and not yet visited. "
+        "You may recommend them ONLY if genuinely the best match — treat as lower priority than fresh discoveries."
+    ) if resurfaceable_spots else ""
 
     taste_context = ""
     if preference_scores and preference_scores.get('rated_count', 0) >= 2:
@@ -2199,7 +2238,7 @@ def get_ai_recommendations(places_data, live_events_data, weather_report, filter
 
 CONTEXT: {location_name} | {weather_report} | {target_date_str} ({relative_day}) | {filters_dict['time']} | {filters_dict['group']}, {filters_dict['food']}, {filters_dict['vibe']}
 {profile_context}{taste_context}
-{blacklist_context}
+{blacklist_context}{resurfaceable_context}
 RULES:
 {f"0. {free_absolute_rule}" + chr(10) if free_absolute_rule else ""}{geo_rule}
 {events_rule}
@@ -2477,6 +2516,16 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
             if _top_kws & _spot_tokens:
                 picked_html = '<div class="wc-picked-for-you">✨ Picked for you</div>'
 
+    # "You saved this" — shown when spot resurfaces from user's old saves
+    resurfaced_html = ''
+    _resurfaceable_names = {n.lower() for n in (st.session_state.get('resurfaceable_spots') or [])}
+    if spot.get('name', '').lower() in _resurfaceable_names:
+        resurfaced_html = (
+            '<div style="display:inline-block;background:#eaf5ef;color:#2d6a4f;'
+            'font-size:0.72rem;font-weight:600;padding:2px 8px;border-radius:10px;'
+            'margin:2px 0 4px 0;">📍 You saved this</div>'
+        )
+
     # Tier badge left-border color by pool membership
     _tn = tier_name.lower()
     if _tn in {"the sure thing", "the crowd pleaser", "the local favorite", "the classic", "the reliable"}:
@@ -2565,7 +2614,7 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
         f'</div>'
         f'<div class="wc-body">'
         f'<div class="wc-name">{title_prefix} {spot["name"]}</div>'
-        f'{rating_html}{picked_html}'
+        f'{rating_html}{picked_html}{resurfaced_html}'
         f'<div class="wc-meta">{category}</div>'
         f'{vibe_pills_html}{event_time_html}'
         f'<div class="wc-address">📍 {address}</div>'
@@ -2936,7 +2985,11 @@ else:
 
                         _wi_pref_scores = get_user_preference_scores(st.session_state.user.id)
                         _wi_kws = tuple((_wi_pref_scores.get('top_keywords') or [])[:2]) if _wi_pref_scores else None
-                        _wi_excluded = tuple(get_excluded_spots(st.session_state.user.id))
+                        _wi_excl_dict = get_excluded_spots(st.session_state.user.id)
+                        _wi_excluded = tuple(
+                            (_wi_excl_dict.get('permanent') or []) + (_wi_excl_dict.get('temporary') or [])
+                        )
+                        st.session_state.resurfaceable_spots = _wi_excl_dict.get('resurfaceable') or []
 
                         _wi_cache_key = f"{st.session_state.user.id}_{_wi_loc}_{_wi_kws}"
                         if st.session_state.get('wild_idea_cache_key') != _wi_cache_key:
@@ -3208,7 +3261,12 @@ else:
                         else:
                             status_loader.info("🗺️ Assembling your perfect itinerary...")
 
-                        all_excluded = list(set((db_excluded or []) + st.session_state.session_seen_spots))
+                        _excl_dict = db_excluded if isinstance(db_excluded, dict) else {'permanent': db_excluded or [], 'temporary': [], 'resurfaceable': []}
+                        _perm_excl = _excl_dict.get('permanent') or []
+                        _temp_excl = _excl_dict.get('temporary') or []
+                        _resurfaceable = _excl_dict.get('resurfaceable') or []
+                        st.session_state.resurfaceable_spots = _resurfaceable
+                        all_excluded = list(set(_perm_excl + _temp_excl + st.session_state.session_seen_spots))
                         user_favorites = user_favorites or []
 
                         cache_key = generate_cache_key(
@@ -3236,7 +3294,8 @@ else:
                                 target_date_str, relative_day, user_profile, all_excluded,
                                 user_favorites, mode=st.session_state.current_mode,
                                 lat=lat, lng=lng, radius_miles=st.session_state.mem_dist,
-                                preference_scores=pref_scores
+                                preference_scores=pref_scores,
+                                resurfaceable_spots=_resurfaceable,
                             )
                             # Build combined photo map from all tiers (or flat list for get_wild)
                             _all_places = []
@@ -3726,9 +3785,14 @@ else:
         _notes  = saved.get('user_notes', '') or ''
         _is_chosen = 'chosen' in _notes.lower()
 
-        # Photo
+        # Photo (max-height capped to prevent overflow)
         _fallback = get_fallback_image(_cat, _desc or _tier)
-        st.image(_photo or _fallback, use_container_width=True)
+        _img_src = _photo or _fallback
+        st.markdown(
+            f'<img src="{_img_src}" style="width:100%;max-height:280px;object-fit:cover;'
+            f'border-radius:8px;margin-bottom:8px;display:block;" alt="">',
+            unsafe_allow_html=True
+        )
 
         # Tier color
         _tn = _tier.lower()
@@ -3919,3 +3983,21 @@ else:
                     if st.button("›", key=f"view_{saved['id']}", use_container_width=True,
                                  help=f"Open {saved['spot_name']}"):
                         _spot_modal(saved)
+
+                # Quick star rating row for chosen spots not yet rated
+                if _is_chosen and not _rating_val:
+                    _ql, _qs1, _qs2, _qs3, _qs4, _qs5 = st.columns([2, 1, 1, 1, 1, 1])
+                    with _ql:
+                        st.caption("Quick rate:")
+                    for _si, _sc in zip([1, 2, 3, 4, 5], [_qs1, _qs2, _qs3, _qs4, _qs5]):
+                        with _sc:
+                            if st.button("★", key=f"qs_{saved['id']}_{_si}", use_container_width=True):
+                                supabase.table('saved_spots').update({'rating': _si}).eq('id', saved['id']).execute()
+                                if _si == 5:
+                                    award_points(st.session_state.user.id, "rating", POINTS['rate'] + POINTS['rate_perfect'], "5-star rating!")
+                                elif _si >= 4:
+                                    award_points(st.session_state.user.id, "rating", POINTS['rate'], "Rated a visit")
+                                if _si >= 4:
+                                    check_and_award_badges(st.session_state.user.id)
+                                st.toast(f"Rated {_si}⭐")
+                                st.rerun()
