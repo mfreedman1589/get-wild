@@ -462,6 +462,12 @@ if 'wild_idea_cache' not in st.session_state: st.session_state.wild_idea_cache =
 if 'wild_idea_cache_key' not in st.session_state: st.session_state.wild_idea_cache_key = None
 if 'wild_idea_fail_count' not in st.session_state: st.session_state.wild_idea_fail_count = 0
 if 'wild_idea_fail_loc' not in st.session_state: st.session_state.wild_idea_fail_loc = ''
+if 'explore_mode' not in st.session_state: st.session_state.explore_mode = "🔍 Search"
+if 'quick_deck' not in st.session_state: st.session_state.quick_deck = []
+if 'quick_deck_index' not in st.session_state: st.session_state.quick_deck_index = 0
+if 'quick_deck_cache_key' not in st.session_state: st.session_state.quick_deck_cache_key = None
+if 'quick_skip_signals' not in st.session_state: st.session_state.quick_skip_signals = []
+if 'quick_save_signals' not in st.session_state: st.session_state.quick_save_signals = []
 if 'show_welcome_bonus' not in st.session_state: st.session_state.show_welcome_bonus = False
 if 'badges_backfilled' not in st.session_state: st.session_state.badges_backfilled = False
 if 'is_loading' not in st.session_state: st.session_state.is_loading = False
@@ -1765,6 +1771,137 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
     except Exception as e:
         print(f"[WildIdea] error: {e}")
         return None
+
+def generate_quick_deck(user_id, lat, lng, location_name, radius_miles=10, skip_signals=None, save_signals=None):
+    """Returns list of up to 6 card-ready dicts for Quick mode, or empty list."""
+    try:
+        # Time context
+        try:
+            _ts = int(time.time())
+            _tz_url = f"https://maps.googleapis.com/maps/api/timezone/json?location={lat},{lng}&timestamp={_ts}&key={GOOGLE_API_KEY}"
+            _tz_res = requests.get(_tz_url, timeout=5).json()
+            if _tz_res.get('status') == 'OK':
+                _local_ts = _ts + _tz_res['dstOffset'] + _tz_res['rawOffset']
+                h = datetime.utcfromtimestamp(_local_ts).hour
+            else:
+                h = datetime.now(timezone.utc).replace(tzinfo=None).hour
+        except:
+            h = datetime.now(timezone.utc).replace(tzinfo=None).hour
+        if 6 <= h < 12:    time_context = "morning"
+        elif 12 <= h < 17: time_context = "afternoon"
+        elif 17 <= h < 21: time_context = "evening"
+        else:              time_context = "late night"
+
+        # Two broad queries for diversity
+        raw_a = fetch_places_semantic(f"unique local hidden gems {location_name}", lat, lng, radius_miles) or []
+        raw_b = fetch_places_semantic(f"popular local bars restaurants entertainment {location_name}", lat, lng, radius_miles) or []
+
+        # Combine and deduplicate by name
+        seen_names = set()
+        raw_places = []
+        for p in raw_a + raw_b:
+            _n = (p.get('displayName', {}).get('text') or '').lower()
+            if _n and _n not in seen_names:
+                seen_names.add(_n)
+                raw_places.append(p)
+
+        if not raw_places:
+            return []
+
+        # Exclude only permanently excluded spots (blacklisted / rejected wild ideas)
+        try:
+            _saved = supabase.table('saved_spots').select('spot_name, rating, user_notes') \
+                .eq('user_id', str(user_id)).execute()
+            _excl_lower = set()
+            for _r in (_saved.data or []):
+                _rating = _r.get('rating') or 0
+                _notes = (_r.get('user_notes') or '').lower()
+                if _rating == 1 or _notes == 'rejected_wild_idea':
+                    _excl_lower.add((_r.get('spot_name') or '').lower())
+            if _excl_lower:
+                raw_places = [
+                    p for p in raw_places
+                    if (p.get('displayName', {}).get('text') or '').lower() not in _excl_lower
+                ]
+        except:
+            pass
+
+        if not raw_places:
+            return []
+
+        # Build slim candidate list (top 15 for diversity)
+        candidates = []
+        for p in raw_places[:15]:
+            candidates.append({
+                "name":    (p.get('displayName', {}).get('text') or ''),
+                "summary": (p.get('editorialSummary', {}).get('text') or ''),
+                "address": (p.get('formattedAddress') or ''),
+            })
+
+        skip_clause = (
+            f"User recently skipped these types: {', '.join(skip_signals[:5])} — avoid similar venues (soft signal only, don't over-correct)."
+            if skip_signals else ""
+        )
+        save_clause = (
+            f"User saved these types: {', '.join(save_signals[:5])} — include similar venues."
+            if save_signals else ""
+        )
+
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            response_format={"type": "json_object"},
+            messages=[{"role": "user", "content": (
+                f"From this list of real local venues near {location_name}, pick 6 diverse surprising venues "
+                f"for a spontaneous outing right now. Mix: 2 reliable, 2 interesting, 2 hidden gems. "
+                f"Time: {time_context}. {skip_clause} {save_clause} "
+                "No chains. No tourist traps. "
+                f"Venues: {json.dumps(candidates)}. "
+                "Return JSON with key 'recommendations' containing an array of exactly 6 items. "
+                "Each item: name (exact from list), category, why_its_perfect (MAX 15 WORDS — one punchy sentence), "
+                "vibe_check (3 words), matched_tags (array of 2-3 strings), emoji, tier_name."
+            )}],
+            max_tokens=600,
+            timeout=15,
+        )
+        data = json.loads(response.choices[0].message.content.strip())
+        picks = data.get('recommendations') or []
+        if not picks:
+            return []
+
+        # Match each pick back to Places data for address/photo/website
+        result = []
+        for pick in picks[:6]:
+            chosen_name = (pick.get('name') or '').lower().strip()
+            matched = next(
+                (p for p in raw_places[:15]
+                 if chosen_name in (p.get('displayName', {}).get('text') or '').lower()),
+                None
+            )
+            if matched:
+                pick['address']             = matched.get('formattedAddress') or pick.get('address', '')
+                pick['website']             = matched.get('websiteUri') or ''
+                pick['photo_url']           = matched.get('photo_url')
+                pick['google_rating']       = matched.get('rating')
+                pick['google_rating_count'] = matched.get('userRatingCount', 0)
+            else:
+                pick.setdefault('address', '')
+                pick.setdefault('website', '')
+                pick.setdefault('photo_url', None)
+            if not isinstance(pick.get('matched_tags'), list):
+                pick['matched_tags'] = []
+            pick.setdefault('emoji', '🎲')
+            pick.setdefault('category', '')
+            pick.setdefault('why_its_perfect', '')
+            pick.setdefault('vibe_check', '')
+            pick.setdefault('tier_name', '')
+            result.append(pick)
+
+        return result
+    except Exception as e:
+        print(f"[QuickDeck] error: {e}")
+        return []
+
 
 def _get_venue_day_pattern(regular_hours):
     """Classify a venue's weekly schedule from regularOpeningHours periods.
@@ -3190,147 +3327,288 @@ else:
 
             st.write("---")
 
-            # Option mappings: display ↔ internal value
-            _GROUP_OPTS  = ["💑 Date", "👨‍👩‍👧 Family", "👯 Friends", "🙋 Solo"]
-            _GROUP_TO_INT = {"💑 Date": "Date", "👨‍👩‍👧 Family": "Family Outing", "👯 Friends": "Friends", "🙋 Solo": "Solo"}
-            _INT_TO_GROUP = {v: k for k, v in _GROUP_TO_INT.items()}
-            _VIBE_OPTS   = ["✨ Anywhere", "🌿 Outside", "🏠 Inside"]
-            _VIBE_TO_INT  = {"✨ Anywhere": "Doesn't Matter", "🌿 Outside": "Outside", "🏠 Inside": "Inside"}
-            _INT_TO_VIBE  = {v: k for k, v in _VIBE_TO_INT.items()}
-            _FOOD_OPTS   = ["🍽️ Full Meal", "🍷 Drinks", "🎯 No Food"]
-            _FOOD_TO_INT  = {"🍽️ Full Meal": "Full Meal", "🍷 Drinks": "Just Drinks/Coffee", "🎯 No Food": "No Food Needed"}
-            _INT_TO_FOOD  = {v: k for k, v in _FOOD_TO_INT.items()}
-            _SPEND_OPTS  = ["🆓 Free", "💰 Moderate", "✨ Splurge"]
-
-            def _seg(label, options, default, sc_key):
-                """Segmented control with radio fallback; syncs default on first render."""
-                if sc_key not in st.session_state or st.session_state[sc_key] not in options:
-                    st.session_state[sc_key] = default if default in options else options[0]
-                try:
-                    val = st.segmented_control(label, options, key=sc_key)
-                    return val if val is not None else st.session_state[sc_key]
-                except AttributeError:
-                    idx = options.index(st.session_state[sc_key])
-                    return st.radio(label, options, index=idx, horizontal=True, key=sc_key + "_r")
-
-            # Row 1: Day + Time side by side
-            _c1, _c2 = st.columns(2)
-            with _c1:
-                ui_day = _seg("📅 When?", ["☀️ Today", "📅 Tomorrow"], st.session_state.mem_day, "seg_day")
-            with _c2:
-                ui_time = _seg("🕐 Time?", ["☀️ Daytime", "🌙 Night"], st.session_state.mem_time, "seg_time")
-            intended_time = f"{ui_day} ({ui_time})"
-
-            # Row 2: Who
-            ui_group_d = _seg("👥 Who?", _GROUP_OPTS, _INT_TO_GROUP.get(st.session_state.mem_group, "💑 Date"), "seg_group")
-            ui_group   = _GROUP_TO_INT.get(ui_group_d, "Date")
-
-            # Row 3: Setting
-            ui_vibe_d = _seg("🌍 Setting?", _VIBE_OPTS, _INT_TO_VIBE.get(st.session_state.mem_vibe, "✨ Anywhere"), "seg_vibe")
-            ui_vibe   = _VIBE_TO_INT.get(ui_vibe_d, "Doesn't Matter")
-
-            # Row 3b: Outdoor Vibe sub-filter (collapsed toggle, only when Outside selected)
-            _OUTDOOR_VIBE_OPTS = ["🥾 Adventure", "🌳 Nature", "🏙️ Urban Outdoor"]
-            _OUTDOOR_VIBE_MAP  = {"🥾 Adventure": "Adventure", "🌳 Nature": "Nature", "🏙️ Urban Outdoor": "Urban Outdoor"}
-            _OUTDOOR_INV_MAP   = {v: k for k, v in _OUTDOOR_VIBE_MAP.items()}
-            if ui_vibe == "Outside":
-                _ov_active = st.session_state.mem_outdoor_vibe
-                _ov_btn_label = (
-                    f"🌲 Outdoor Vibe: {_ov_active} ✓"
-                    if _ov_active else "🌲 Narrow your outdoor vibe? (optional)"
-                )
-                _ov_toggle = st.segmented_control(
-                    "Outdoor Vibe",
-                    options=[_ov_btn_label],
-                    default=_ov_btn_label if st.session_state.show_outdoor_vibe else None,
-                    key="ov_toggle_seg",
+            # Mode toggle: Search vs Quick
+            try:
+                _em = st.segmented_control(
+                    "", ["🔍 Search", "⚡ Quick"],
+                    default=st.session_state.explore_mode,
+                    key="explore_mode_ctrl",
                     label_visibility="collapsed",
                 )
-                show_outdoor_vibe = _ov_toggle is not None
-                st.session_state.show_outdoor_vibe = show_outdoor_vibe
-                if show_outdoor_vibe:
-                    _ov_sel = st.segmented_control(
-                        "Outside Vibe?",
-                        _OUTDOOR_VIBE_OPTS,
-                        default=_OUTDOOR_INV_MAP.get(_ov_active),
-                        key="seg_outdoor_vibe",
+                if _em is not None:
+                    st.session_state.explore_mode = _em
+            except AttributeError:
+                pass
+
+            if st.session_state.explore_mode == "🔍 Search":
+                # Option mappings: display ↔ internal value
+                _GROUP_OPTS  = ["💑 Date", "👨‍👩‍👧 Family", "👯 Friends", "🙋 Solo"]
+                _GROUP_TO_INT = {"💑 Date": "Date", "👨‍👩‍👧 Family": "Family Outing", "👯 Friends": "Friends", "🙋 Solo": "Solo"}
+                _INT_TO_GROUP = {v: k for k, v in _GROUP_TO_INT.items()}
+                _VIBE_OPTS   = ["✨ Anywhere", "🌿 Outside", "🏠 Inside"]
+                _VIBE_TO_INT  = {"✨ Anywhere": "Doesn't Matter", "🌿 Outside": "Outside", "🏠 Inside": "Inside"}
+                _INT_TO_VIBE  = {v: k for k, v in _VIBE_TO_INT.items()}
+                _FOOD_OPTS   = ["🍽️ Full Meal", "🍷 Drinks", "🎯 No Food"]
+                _FOOD_TO_INT  = {"🍽️ Full Meal": "Full Meal", "🍷 Drinks": "Just Drinks/Coffee", "🎯 No Food": "No Food Needed"}
+                _INT_TO_FOOD  = {v: k for k, v in _FOOD_TO_INT.items()}
+                _SPEND_OPTS  = ["🆓 Free", "💰 Moderate", "✨ Splurge"]
+
+                def _seg(label, options, default, sc_key):
+                    """Segmented control with radio fallback; syncs default on first render."""
+                    if sc_key not in st.session_state or st.session_state[sc_key] not in options:
+                        st.session_state[sc_key] = default if default in options else options[0]
+                    try:
+                        val = st.segmented_control(label, options, key=sc_key)
+                        return val if val is not None else st.session_state[sc_key]
+                    except AttributeError:
+                        idx = options.index(st.session_state[sc_key])
+                        return st.radio(label, options, index=idx, horizontal=True, key=sc_key + "_r")
+
+                # Row 1: Day + Time side by side
+                _c1, _c2 = st.columns(2)
+                with _c1:
+                    ui_day = _seg("📅 When?", ["☀️ Today", "📅 Tomorrow"], st.session_state.mem_day, "seg_day")
+                with _c2:
+                    ui_time = _seg("🕐 Time?", ["☀️ Daytime", "🌙 Night"], st.session_state.mem_time, "seg_time")
+                intended_time = f"{ui_day} ({ui_time})"
+
+                # Row 2: Who
+                ui_group_d = _seg("👥 Who?", _GROUP_OPTS, _INT_TO_GROUP.get(st.session_state.mem_group, "💑 Date"), "seg_group")
+                ui_group   = _GROUP_TO_INT.get(ui_group_d, "Date")
+
+                # Row 3: Setting
+                ui_vibe_d = _seg("🌍 Setting?", _VIBE_OPTS, _INT_TO_VIBE.get(st.session_state.mem_vibe, "✨ Anywhere"), "seg_vibe")
+                ui_vibe   = _VIBE_TO_INT.get(ui_vibe_d, "Doesn't Matter")
+
+                # Row 3b: Outdoor Vibe sub-filter (collapsed toggle, only when Outside selected)
+                _OUTDOOR_VIBE_OPTS = ["🥾 Adventure", "🌳 Nature", "🏙️ Urban Outdoor"]
+                _OUTDOOR_VIBE_MAP  = {"🥾 Adventure": "Adventure", "🌳 Nature": "Nature", "🏙️ Urban Outdoor": "Urban Outdoor"}
+                _OUTDOOR_INV_MAP   = {v: k for k, v in _OUTDOOR_VIBE_MAP.items()}
+                if ui_vibe == "Outside":
+                    _ov_active = st.session_state.mem_outdoor_vibe
+                    _ov_btn_label = (
+                        f"🌲 Outdoor Vibe: {_ov_active} ✓"
+                        if _ov_active else "🌲 Narrow your outdoor vibe? (optional)"
+                    )
+                    _ov_toggle = st.segmented_control(
+                        "Outdoor Vibe",
+                        options=[_ov_btn_label],
+                        default=_ov_btn_label if st.session_state.show_outdoor_vibe else None,
+                        key="ov_toggle_seg",
                         label_visibility="collapsed",
                     )
-                    ui_outdoor_vibe = _OUTDOOR_VIBE_MAP.get(_ov_sel)
+                    show_outdoor_vibe = _ov_toggle is not None
+                    st.session_state.show_outdoor_vibe = show_outdoor_vibe
+                    if show_outdoor_vibe:
+                        _ov_sel = st.segmented_control(
+                            "Outside Vibe?",
+                            _OUTDOOR_VIBE_OPTS,
+                            default=_OUTDOOR_INV_MAP.get(_ov_active),
+                            key="seg_outdoor_vibe",
+                            label_visibility="collapsed",
+                        )
+                        ui_outdoor_vibe = _OUTDOOR_VIBE_MAP.get(_ov_sel)
+                    else:
+                        ui_outdoor_vibe = _ov_active  # preserve filter when collapsed
                 else:
-                    ui_outdoor_vibe = _ov_active  # preserve filter when collapsed
-            else:
-                st.session_state.show_outdoor_vibe = False
-                ui_outdoor_vibe = None
+                    st.session_state.show_outdoor_vibe = False
+                    ui_outdoor_vibe = None
 
-            # Row 4: Food
-            ui_food_d = _seg("🍽️ Food?", _FOOD_OPTS, _INT_TO_FOOD.get(st.session_state.mem_food, "🍽️ Full Meal"), "seg_food")
-            ui_food   = _FOOD_TO_INT.get(ui_food_d, "Full Meal")
+                # Row 4: Food
+                ui_food_d = _seg("🍽️ Food?", _FOOD_OPTS, _INT_TO_FOOD.get(st.session_state.mem_food, "🍽️ Full Meal"), "seg_food")
+                ui_food   = _FOOD_TO_INT.get(ui_food_d, "Full Meal")
 
-            # Row 5: Budget
-            ui_spend = _seg("💸 Budget?", _SPEND_OPTS, st.session_state.mem_spend, "seg_spend")
+                # Row 5: Budget
+                ui_spend = _seg("💸 Budget?", _SPEND_OPTS, st.session_state.mem_spend, "seg_spend")
 
-            # Row 6: Distance (extends to 50 mi for Outside searches)
-            _dist_max = 50 if ui_vibe == "Outside" else 25
-            _dist_val = min(st.session_state.mem_dist, _dist_max)
-            ui_dist = st.slider("📍 Max Distance (Miles)", 1, _dist_max, _dist_val)
+                # Row 6: Distance (extends to 50 mi for Outside searches)
+                _dist_max = 50 if ui_vibe == "Outside" else 25
+                _dist_val = min(st.session_state.mem_dist, _dist_max)
+                ui_dist = st.slider("📍 Max Distance (Miles)", 1, _dist_max, _dist_val)
 
-            # Row 7: Specific keyword (optional)
-            st.markdown('<div style="margin-top:16px;"></div>', unsafe_allow_html=True)
-            kw_expanded = st.segmented_control(
-                "🔍 Keyword",
-                options=["🔍 Looking for Something Specific?"],
-                default=None,
-                key="kw_toggle_seg",
-            )
-            show_keyword = kw_expanded is not None
-            if show_keyword:
-                ui_spec = st.text_input("Keyword", value=st.session_state.mem_spec, placeholder="e.g., 'romantic', 'live jazz', 'axe throwing'", label_visibility="collapsed", key="spec_kw_input")
-            else:
-                ui_spec = st.session_state.mem_spec
-
-            st.markdown('<div style="margin:16px 0;border-top:1px solid #e0ece4;"></div>', unsafe_allow_html=True)
-            btn_col1, btn_col2 = st.columns(2)
-            with btn_col1:
-                top_3_clicked = st.button("🌟 Top 3 Recommendations", use_container_width=True)
-            with btn_col2:
-                get_wild_clicked = st.button("🎲 GET WILD", type="primary", use_container_width=True)
-
-            wild_count = get_wild_count_today()
-            if wild_count is not None and wild_count > 0:
-                st.markdown(f"<div style='text-align:center;color:#e65100;font-weight:600;font-size:0.9rem;margin-top:4px;'>🔥 {wild_count} {'person' if wild_count == 1 else 'people'} got wild today — join them</div>", unsafe_allow_html=True)
-
-            if top_3_clicked or get_wild_clicked:
-                if not ui_loc and not st.session_state.mem_gps_active:
-                    st.warning("Please enter a location or click the GPS icon first!")
+                # Row 7: Specific keyword (optional)
+                st.markdown('<div style="margin-top:16px;"></div>', unsafe_allow_html=True)
+                kw_expanded = st.segmented_control(
+                    "🔍 Keyword",
+                    options=["🔍 Looking for Something Specific?"],
+                    default=None,
+                    key="kw_toggle_seg",
+                )
+                show_keyword = kw_expanded is not None
+                if show_keyword:
+                    ui_spec = st.text_input("Keyword", value=st.session_state.mem_spec, placeholder="e.g., 'romantic', 'live jazz', 'axe throwing'", label_visibility="collapsed", key="spec_kw_input")
                 else:
-                    st.session_state.mem_loc = ui_loc
-                    st.session_state.mem_day = ui_day
-                    st.session_state.mem_time = ui_time
-                    st.session_state.mem_group = ui_group
-                    st.session_state.mem_vibe = ui_vibe
-                    st.session_state.mem_food = ui_food
-                    st.session_state.mem_dist = ui_dist
-                    st.session_state.mem_spec = ui_spec
-                    st.session_state.mem_spend = ui_spend
-                    st.session_state.mem_outdoor_vibe = ui_outdoor_vibe
+                    ui_spec = st.session_state.mem_spec
 
-                    st.session_state.current_mode = "get_wild" if get_wild_clicked else "top_3"
-                    st.session_state.filters_dict = {
-                        "group": ui_group, "time": intended_time,
-                        "vibe": ui_vibe, "food": ui_food,
-                        "specific": ui_spec, "spend": ui_spend,
-                        "outdoor_vibe": ui_outdoor_vibe,
-                    }
-                    st.session_state.search_active = True
-                    st.session_state._scrolled_to_top = False
-                    st.session_state.trigger_fetch = True
-                    st.session_state.is_loading = True
-                    st.session_state.session_seen_spots = []
-                    city = "Nearby" if st.session_state.mem_gps_active else (ui_loc.split()[0].rstrip(',') if ui_loc else "Unknown")
-                    if get_wild_clicked:
-                        increment_wild_counter(city)
-                    st.rerun()
+                st.markdown('<div style="margin:16px 0;border-top:1px solid #e0ece4;"></div>', unsafe_allow_html=True)
+                btn_col1, btn_col2 = st.columns(2)
+                with btn_col1:
+                    top_3_clicked = st.button("🌟 Top 3 Recommendations", use_container_width=True)
+                with btn_col2:
+                    get_wild_clicked = st.button("🎲 GET WILD", type="primary", use_container_width=True)
+
+                wild_count = get_wild_count_today()
+                if wild_count is not None and wild_count > 0:
+                    st.markdown(f"<div style='text-align:center;color:#e65100;font-weight:600;font-size:0.9rem;margin-top:4px;'>🔥 {wild_count} {'person' if wild_count == 1 else 'people'} got wild today — join them</div>", unsafe_allow_html=True)
+
+                if top_3_clicked or get_wild_clicked:
+                    if not ui_loc and not st.session_state.mem_gps_active:
+                        st.warning("Please enter a location or click the GPS icon first!")
+                    else:
+                        st.session_state.mem_loc = ui_loc
+                        st.session_state.mem_day = ui_day
+                        st.session_state.mem_time = ui_time
+                        st.session_state.mem_group = ui_group
+                        st.session_state.mem_vibe = ui_vibe
+                        st.session_state.mem_food = ui_food
+                        st.session_state.mem_dist = ui_dist
+                        st.session_state.mem_spec = ui_spec
+                        st.session_state.mem_spend = ui_spend
+                        st.session_state.mem_outdoor_vibe = ui_outdoor_vibe
+
+                        st.session_state.current_mode = "get_wild" if get_wild_clicked else "top_3"
+                        st.session_state.filters_dict = {
+                            "group": ui_group, "time": intended_time,
+                            "vibe": ui_vibe, "food": ui_food,
+                            "specific": ui_spec, "spend": ui_spend,
+                            "outdoor_vibe": ui_outdoor_vibe,
+                        }
+                        st.session_state.search_active = True
+                        st.session_state._scrolled_to_top = False
+                        st.session_state.trigger_fetch = True
+                        st.session_state.is_loading = True
+                        st.session_state.session_seen_spots = []
+                        city = "Nearby" if st.session_state.mem_gps_active else (ui_loc.split()[0].rstrip(',') if ui_loc else "Unknown")
+                        if get_wild_clicked:
+                            increment_wild_counter(city)
+                        st.rerun()
+
+            else:
+                # ---- ⚡ QUICK MODE ----
+                # Resolve location
+                _qk_lat, _qk_lng, _qk_loc = None, None, ""
+                if st.session_state.mem_gps_active and st.session_state.mem_geo_data:
+                    _qk_lat = st.session_state.mem_geo_data['latitude']
+                    _qk_lng = st.session_state.mem_geo_data['longitude']
+                    _qk_loc = "your current location"
+                elif st.session_state.mem_loc:
+                    _qk_lat, _qk_lng = get_coordinates(st.session_state.mem_loc)
+                    _qk_loc = st.session_state.mem_loc
+
+                if not _qk_lat:
+                    st.info("📍 Enter a location above to load your Quick deck.")
+                else:
+                    _uid_qk = st.session_state.user.id
+                    _qk_hour = datetime.now(timezone.utc).replace(tzinfo=None).hour
+                    _qk_cache_key = f"quick_{_uid_qk}_{_qk_loc}_{_qk_hour}"
+
+                    # Generate deck if stale or empty
+                    if (st.session_state.quick_deck_cache_key != _qk_cache_key
+                            or not st.session_state.quick_deck):
+                        _qk_placeholder = st.empty()
+                        _qk_placeholder.markdown(
+                            '<div style="background:#eaf5ef;border-left:3px solid #2d6a4f;'
+                            'color:#2d6a4f;border-radius:8px;padding:12px;font-weight:600;">'
+                            '⚡ Loading your Quick deck...</div>',
+                            unsafe_allow_html=True,
+                        )
+                        _radius = st.session_state.get('mem_dist', 10)
+                        st.session_state.quick_deck = generate_quick_deck(
+                            _uid_qk, _qk_lat, _qk_lng, _qk_loc,
+                            radius_miles=_radius,
+                            skip_signals=st.session_state.quick_skip_signals or None,
+                            save_signals=st.session_state.quick_save_signals or None,
+                        )
+                        st.session_state.quick_deck_cache_key = _qk_cache_key
+                        st.session_state.quick_deck_index = 0
+                        _qk_placeholder.empty()
+
+                    _deck = st.session_state.quick_deck
+                    _idx  = st.session_state.quick_deck_index
+
+                    if not _deck:
+                        st.info("Nothing quick nearby right now — try a different location or check back later 🌿")
+                    elif _idx >= len(_deck):
+                        # End of deck
+                        st.markdown(
+                            '<div style="text-align:center;color:#52b788;font-size:1rem;'
+                            'font-weight:600;padding:20px 0;">You\'ve seen everything nearby 🌿</div>',
+                            unsafe_allow_html=True,
+                        )
+                        if st.button("🔄 Load More", use_container_width=True, key="qk_load_more"):
+                            _radius = st.session_state.get('mem_dist', 10)
+                            st.session_state.quick_deck = generate_quick_deck(
+                                _uid_qk, _qk_lat, _qk_lng, _qk_loc,
+                                radius_miles=_radius,
+                                skip_signals=st.session_state.quick_skip_signals or None,
+                                save_signals=st.session_state.quick_save_signals or None,
+                            )
+                            st.session_state.quick_deck_cache_key = _qk_cache_key
+                            st.session_state.quick_deck_index = 0
+                            st.rerun()
+                    else:
+                        # Show current card
+                        _spot = _deck[_idx]
+                        st.markdown(
+                            f'<div style="color:#9ca3af;font-size:0.78rem;text-align:right;'
+                            f'margin-bottom:4px;">{_idx + 1} / {len(_deck)}</div>',
+                            unsafe_allow_html=True,
+                        )
+                        render_spot_card(_spot, _qk_loc, _uid_qk, _idx + 1, "get_wild")
+
+                        _qk_col1, _qk_col2 = st.columns(2)
+                        with _qk_col1:
+                            if st.button("✕ Skip", use_container_width=True, key=f"qk_skip_{_idx}"):
+                                # Record soft skip signal
+                                _skip_cat = (_spot.get('category') or '').strip()
+                                _skip_vibe = (_spot.get('vibe_check') or '').strip()
+                                if _skip_cat:
+                                    st.session_state.quick_skip_signals = (
+                                        st.session_state.quick_skip_signals + [_skip_cat]
+                                    )[-20:]
+                                if _skip_vibe:
+                                    st.session_state.quick_skip_signals = (
+                                        st.session_state.quick_skip_signals + [_skip_vibe]
+                                    )[-20:]
+                                st.session_state.quick_deck_index += 1
+                                st.rerun()
+                        with _qk_col2:
+                            if st.button("❤️ Save", type="primary", use_container_width=True, key=f"qk_save_{_idx}"):
+                                # Record save signal
+                                _save_cat = (_spot.get('category') or '').strip()
+                                _save_vibe = (_spot.get('vibe_check') or '').strip()
+                                if _save_cat:
+                                    st.session_state.quick_save_signals = (
+                                        st.session_state.quick_save_signals + [_save_cat]
+                                    )[-20:]
+                                if _save_vibe:
+                                    st.session_state.quick_save_signals = (
+                                        st.session_state.quick_save_signals + [_save_vibe]
+                                    )[-20:]
+                                # Save to DB
+                                _tags_str = ', '.join(_spot.get('matched_tags') or [])
+                                _pre = save_spot_to_db(
+                                    _uid_qk,
+                                    _spot.get('name', ''),
+                                    _spot.get('address', ''),
+                                    _spot.get('category', ''),
+                                    tier_name=_spot.get('tier_name', ''),
+                                    matched_tags=_tags_str,
+                                    photo_url=_spot.get('photo_url') or '',
+                                    description=_spot.get('why_its_perfect', ''),
+                                    website=_spot.get('website', ''),
+                                    mode="quick",
+                                )
+                                if _pre == 0:
+                                    award_points(_uid_qk, "save", POINTS['first_save'], "First save!")
+                                else:
+                                    award_points(_uid_qk, "save", POINTS['save'], f"Saved {_spot.get('name', '')}")
+                                check_and_award_badges(_uid_qk)
+                                st.session_state.saved_spots_dirty = True
+                                st.session_state.pref_scores_dirty = True
+                                st.session_state.quick_deck_index += 1
+                                st.toast("❤️ Saved! Check your Adventure Ledger")
+                                st.rerun()
 
         # --- SCREEN 2: THE RESULTS & LOADER ---
         else:
