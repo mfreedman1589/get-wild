@@ -2150,12 +2150,9 @@ def get_ai_recommendations(places_data, live_events_data, weather_report, filter
     )
 
     hidden_gem_mandate = (
-        "HIDDEN GEM MANDATE: For the TIER 3 (Hidden Gem) recommendation specifically, actively prefer:\n"
-        "- Venues with fewer than 100 Google reviews (newer = better)\n"
-        "- Venues whose name or description contains: pop-up, grand opening, soft launch, new, just opened, hidden, speakeasy, secret, limited time\n"
-        "- Non-traditional experiences: escape rooms, art studios, pottery, maker spaces, hiking trails, scenic viewpoints, community galleries\n"
-        "- Results tagged freshness_boost=True in TIER 3 DATA are newly discovered — strongly prefer these\n"
-        "- Avoid recommending well-known chains or tourist spots for this tier — if it has 500+ reviews it is NOT a hidden gem"
+        "HIDDEN GEM: For TIER 3, prefer venues with <100 reviews; "
+        "tagged pop-up/speakeasy/hidden/new/just-opened; non-traditional activities (escape rooms, art studios, trails, viewpoints). "
+        "freshness_boost=True in TIER 3 DATA = top priority. Never use chains or 500+ review spots for this tier."
     )
 
     outdoor_vibe_rule = ""
@@ -2265,26 +2262,20 @@ RULES:
 3. EVENTS DATE CHECK: Only events with date_verified=True on {relative_day} ({target_date_str}) are eligible. why_its_perfect must include venue name and address. Never fabricate event details.
 {weather_rule}
 5. NO HALLUCINATION: Use exact addresses and URLs from input data. Never invent.
-6. VARIETY PREFERENCE: Strongly prefer recommendations from different venue categories when the data allows. Specifically:
-   - Avoid two venues from the exact same subcategory (two identical bar types, two of the same cuisine) when alternatives exist in the data
-   - If food filter is 'No Food Needed' or 'Just Drinks/Coffee', try to include at least one non-food venue
-   - Avoid returning 3 events — Google Places should provide most results
-   - If the available data genuinely has limited variety, it is acceptable to use the same category — returning 3 results is always more important than strict variety
+6. VARIETY: Mix venue types. Avoid two venues from the same subcategory. Avoid 3 events — prefer Google Places results. Include at least one non-food venue if food filter is 'No Food Needed' or 'Just Drinks/Coffee'.
 {f"7. {group_rule}" if group_rule else ""}
 {f"8. {budget_rule}" if budget_rule else ""}
 9. {price_rule}
 10. {hours_rule}
 11. {hidden_gem_mandate}
-12. FRESHNESS BONUS: Any venue tagged just_opened=True in the input data is a priority pick for the TIER 3 (Hidden Gem) or TIER 2 (Fresh Take) recommendation — these are rare finds. Always include one if available.
-13. TRAIL DATA: Some results may be tagged source=alltrails. These are real verified trails with difficulty ratings and length. For outdoor/active searches, strongly consider including one trail as the Adventure or Hidden Gem tier pick.
+12. just_opened=True venues are priority picks for TIER 2/3 — include one if available.
+13. source=alltrails are verified real trails — prioritize for outdoor/active searches, especially Adventure or Hidden Gem tier.
 {f"14. {outdoor_vibe_rule}" if outdoor_vibe_rule else ""}{specific_rule}
 15. {day_pattern_rule}
 
 {instruction}
 
-{'' if mode == 'get_wild' else 'FALLBACK: If strict rules leave fewer than 3 valid options, relax non-critical preferences (variety, price matching, hours) to ensure exactly 3 recommendations are always returned. It is always better to return 3 slightly imperfect results than 1 perfect result. Never return fewer than 3.'}
-
-Return JSON with a 'recommendations' array. Each item: name, tier_name, category, address (exact), why_its_perfect (2-3 sentences), vibe_check (3 words), matched_tags (2-3 short descriptor strings, always required — e.g. "cozy", "date night", "craft cocktails"; if a specific keyword was given it MUST appear in matched_tags), website, reservations_url (if you have high confidence this specific venue accepts reservations on OpenTable or Resy, return the direct venue booking URL — otherwise null; do not guess or construct search URLs), lat, lng, spontaneity_score (integer 1-10 using this strict rubric — DO NOT inflate scores: 1-2=mainstream chain or famous landmark everyone knows (Smithsonian, Cheesecake Factory, Central Park); 3-4=solid local spot most people have heard of or would immediately think to Google (neighborhood brewery, popular brunch spot, well-known hiking trail); 5-6=genuinely interesting find that most people wouldn't think of themselves but is easy to enjoy (rooftop bar with no reservations needed, lesser-known gallery, unique food hall); 7-8=surprisingly unconventional or hard-to-discover — requires insider knowledge or creative thinking (hidden speakeasy, axe throwing bar, ceramics class, underground supper club); 9-10=truly rare, unexpected, or brand-new — most locals haven't heard of it yet (pop-up experience, brand-new venue in soft opening, extremely niche activity). A small local museum scores 3-4. A neighborhood park scores 2-3. A bowling alley scores 5. Axe throwing scores 7. A brand-new pop-up art installation scores 9.)"""
+Return JSON with a 'recommendations' array. Each item: name, tier_name, category, address (exact), why_its_perfect (2-3 sentences), vibe_check (3 words), matched_tags (2-3 short descriptor strings, always required; if a specific keyword was given it MUST appear in matched_tags), website, reservations_url (OpenTable/Resy direct URL only; null if unsure; never guess), lat, lng, spontaneity_score (1-10, never inflate: 1-2=chain/landmark; 3-4=known local spot; 5-6=interesting find most wouldn't Google; 7-8=insider knowledge needed; 9-10=rare/brand-new. museum=3, park=2, bowling=5, axe-throwing=7, pop-up=9)"""
 
 
     try:
