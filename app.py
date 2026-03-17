@@ -460,6 +460,8 @@ if 'wild_idea_dismissed' not in st.session_state: st.session_state.wild_idea_dis
 if 'wild_idea_expanded' not in st.session_state: st.session_state.wild_idea_expanded = False
 if 'wild_idea_cache' not in st.session_state: st.session_state.wild_idea_cache = None
 if 'wild_idea_cache_key' not in st.session_state: st.session_state.wild_idea_cache_key = None
+if 'wild_idea_fail_count' not in st.session_state: st.session_state.wild_idea_fail_count = 0
+if 'wild_idea_fail_loc' not in st.session_state: st.session_state.wild_idea_fail_loc = ''
 if 'show_welcome_bonus' not in st.session_state: st.session_state.show_welcome_bonus = False
 if 'badges_backfilled' not in st.session_state: st.session_state.badges_backfilled = False
 if 'is_loading' not in st.session_state: st.session_state.is_loading = False
@@ -1731,7 +1733,7 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
                 "matched_tags (array of 2-3 short descriptor strings)."
             )}],
             max_tokens=200,
-            timeout=10,
+            timeout=15,
         )
         data = json.loads(response.choices[0].message.content.strip())
         if not data.get('name') or not data.get('why_now'):
@@ -1760,9 +1762,9 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
             data['category'] = ''
 
         return data
-    except:
-        pass
-    return None
+    except Exception as e:
+        print(f"[WildIdea] error: {e}")
+        return None
 
 def _get_venue_day_pattern(regular_hours):
     """Classify a venue's weekly schedule from regularOpeningHours periods.
@@ -3131,6 +3133,7 @@ else:
                             _wi_placeholder.empty()
                         _idea = st.session_state.wild_idea_cache
                         if _idea:
+                            st.session_state.wild_idea_fail_count = 0
                             st.markdown(
                                 '<div style="font-size:0.72rem;font-weight:700;letter-spacing:1.2px;'
                                 'color:#2d6a4f;margin-bottom:6px;">💡 HERE\'S A WILD IDEA...</div>',
@@ -3138,8 +3141,18 @@ else:
                             )
                             render_wild_idea_card(_idea, _wi_loc, st.session_state.user.id)
                         else:
-                            # Generation failed — collapse to teaser
-                            st.session_state.wild_idea_expanded = False
+                            # Generation failed — track retries per location
+                            _fail_loc_key = _wi_loc or str(_wi_lat)
+                            if st.session_state.get('wild_idea_fail_loc') != _fail_loc_key:
+                                st.session_state.wild_idea_fail_count = 0
+                            st.session_state.wild_idea_fail_count += 1
+                            st.session_state.wild_idea_fail_loc = _fail_loc_key
+                            st.session_state.wild_idea_cache_key = None  # allow retry
+                            if st.session_state.wild_idea_fail_count >= 2:
+                                st.info("Nothing wild nearby right now — try a different location or check back later 🌿")
+                            else:
+                                st.toast("Couldn't find a Wild Idea right now — try again in a moment 🌿")
+                                st.session_state.wild_idea_expanded = False
                     else:
                         # Location resolve failed — show message instead of collapsing
                         st.info("📍 Couldn't resolve your location. Try entering a city name in the search field.")
