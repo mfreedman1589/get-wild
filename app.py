@@ -404,11 +404,12 @@ custom_css = """
     .wc-picked-for-you { font-size: 0.72rem; color: #52b788; margin: 2px 0 4px 0; }
 
     /* Quick-rate star buttons in Saved tab — compact override */
-    .gw-qs-anchor + div .stButton > button,
-    div:has(.gw-qs-anchor) + div .stButton > button {
-        min-height: 26px !important;
-        padding: 0 4px !important;
-        font-size: 18px !important;
+    div:has([data-testid="gw-qs-anchor"]) ~ div .stButton > button {
+        min-height: 24px !important;
+        max-height: 24px !important;
+        width: 32px !important;
+        padding: 0 2px !important;
+        font-size: 16px !important;
         border-radius: 6px !important;
         font-weight: 400 !important;
     }
@@ -486,9 +487,9 @@ def get_profile(user_id):
     except: return None
 
 def get_excluded_spots(user_id):
-    """Returns tiered exclusion dict: permanent, temporary (30-day), resurfaceable."""
+    """Returns tiered exclusion dict: permanent, temporary (14-day), resurfaceable."""
     try:
-        cutoff_30 = (datetime.utcnow() - timedelta(days=30)).isoformat()
+        cutoff_14 = (datetime.utcnow() - timedelta(days=14)).isoformat()
         res = supabase.table('saved_spots').select('spot_name, rating, user_notes, saved_at').eq('user_id', user_id).execute()
         permanent, temporary, resurfaceable = [], [], []
         for s in (res.data or []):
@@ -496,10 +497,9 @@ def get_excluded_spots(user_id):
             rating = s.get('rating') or 0
             notes = (s.get('user_notes') or '').lower()
             saved_at = s.get('saved_at') or ''
-            is_chosen = 'chosen' in notes
-            if rating == 1 or notes == 'rejected_wild_idea' or (is_chosen and rating >= 3):
+            if rating == 1 or notes == 'rejected_wild_idea':
                 permanent.append(name)
-            elif saved_at > cutoff_30:
+            elif saved_at > cutoff_14:
                 temporary.append(name)
             else:
                 resurfaceable.append(name)
@@ -562,6 +562,7 @@ def get_user_preference_scores(user_id):
         "trivia", "axe throwing", "escape room", "pottery", "painting", "hiking",
         "kayaking", "scenic", "historic", "hidden", "intimate", "lively",
         "romantic", "cozy", "trendy",
+        "craft cocktails", "rooftop bar", "wine bar", "jazz club",
     ]
     _STOP_WORDS = {'the', 'a', 'an', 'and', 'or', 'of', 'in', 'at', 'to', 'for', 'by', 'with', 'on', '&'}
     _GENERIC_STOP = {
@@ -1407,9 +1408,9 @@ def fetch_tier_places(t1_query, t2_query, t3_query, lat, lng, radius_miles):
         return _process_places(raw, lat, lng, threshold, freshness_boost=freshness_boost)
 
     with ThreadPoolExecutor(max_workers=3) as executor:
-        f1 = executor.submit(_fetch, t1_query, 10, False)
-        f2 = executor.submit(_fetch, t2_query, 8,  False)
-        f3 = executor.submit(_fetch, t3_query, 8,  True)   # freshness_boost flags tier 3 results
+        f1 = executor.submit(_fetch, t1_query, 15, False)
+        f2 = executor.submit(_fetch, t2_query, 15, False)
+        f3 = executor.submit(_fetch, t3_query, 15, True)   # freshness_boost flags tier 3 results
         tier1 = f1.result()
         tier2 = f2.result()
         tier3 = f3.result()
@@ -2005,11 +2006,7 @@ def get_ai_recommendations(places_data, live_events_data, weather_report, filter
         f"{', '.join(excluded_spots)}"
     ) if excluded_spots else ""
 
-    resurfaceable_context = (
-        f"\nPREVIOUSLY SAVED (eligible for resurfacing): {', '.join((resurfaceable_spots or [])[:10])}. "
-        "These venues were saved by the user more than 30 days ago and not yet visited. "
-        "You may recommend them ONLY if genuinely the best match — treat as lower priority than fresh discoveries."
-    ) if resurfaceable_spots else ""
+    resurfaceable_context = ""  # resurfaceable spots treated as normal candidates
 
     taste_context = ""
     if preference_scores and preference_scores.get('rated_count', 0) >= 2:
@@ -3285,7 +3282,9 @@ else:
                         _temp_excl = _excl_dict.get('temporary') or []
                         _resurfaceable = _excl_dict.get('resurfaceable') or []
                         st.session_state.resurfaceable_spots = _resurfaceable
-                        all_excluded = list(set(_perm_excl + _temp_excl + st.session_state.session_seen_spots))
+                        # get_wild excludes recently-saved spots too; top_3 only hard-excludes blacklisted/rejected
+                        _base_excl = _perm_excl + (_temp_excl if st.session_state.current_mode == "get_wild" else [])
+                        all_excluded = list(set(_base_excl + st.session_state.session_seen_spots))
                         user_favorites = user_favorites or []
 
                         cache_key = generate_cache_key(
@@ -4010,7 +4009,7 @@ else:
                 ) if _is_chosen else ''
                 _sub_sep = ' · ' if _category and (_stars_html or _chosen_html) else ''
 
-                col_info, col_action = st.columns([5, 1])
+                col_info, col_del, col_action = st.columns([5, 0.65, 0.65])
                 with col_info:
                     st.markdown(
                         f'<div style="padding:6px 0;">'
@@ -4021,6 +4020,20 @@ else:
                         f'</div>',
                         unsafe_allow_html=True
                     )
+                with col_del:
+                    _confirm_key = f"confirm_del_{saved['id']}"
+                    if st.session_state.get(_confirm_key):
+                        if st.button("✓", key=f"del_yes_{saved['id']}", use_container_width=True,
+                                     help="Confirm remove"):
+                            supabase.table('saved_spots').delete().eq('id', saved['id']).execute()
+                            st.session_state.pop(_confirm_key, None)
+                            st.toast(f"Removed {saved['spot_name']}")
+                            st.rerun()
+                    else:
+                        if st.button("🗑", key=f"del_{saved['id']}", use_container_width=True,
+                                     help="Remove from ledger"):
+                            st.session_state[_confirm_key] = True
+                            st.rerun()
                 with col_action:
                     if st.button("›", key=f"view_{saved['id']}", use_container_width=True,
                                  help=f"Open {saved['spot_name']}"):
@@ -4028,8 +4041,8 @@ else:
 
                 # Quick star rating row for all unrated spots
                 if not _rating_val:
-                    st.markdown('<div class="gw-qs-anchor"></div>', unsafe_allow_html=True)
-                    _ql, _qs1, _qs2, _qs3, _qs4, _qs5 = st.columns([2, 1, 1, 1, 1, 1])
+                    st.markdown('<div data-testid="gw-qs-anchor" style="display:none;"></div>', unsafe_allow_html=True)
+                    _qs1, _qs2, _qs3, _qs4, _qs5, _ql = st.columns([0.5, 0.5, 0.5, 0.5, 0.5, 3])
                     with _ql:
                         st.caption("Rate:")
                     for _si, _sc in zip([1, 2, 3, 4, 5], [_qs1, _qs2, _qs3, _qs4, _qs5]):
