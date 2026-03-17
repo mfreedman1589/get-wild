@@ -3068,7 +3068,7 @@ else:
             loc_col1, loc_col2 = st.columns([5, 1])
             
             with loc_col1: 
-                ui_loc = st.text_input("Location", value=st.session_state.mem_loc, placeholder="Enter City or ZIP Code", label_visibility="collapsed")
+                ui_loc = st.text_input("Location", placeholder="Enter City or ZIP Code", label_visibility="collapsed", key="mem_loc")
             with loc_col2:
                 # Only render the component when GPS is not yet active.
                 # Once active, the component keeps firing componentValue updates
@@ -4064,40 +4064,47 @@ else:
                         unsafe_allow_html=True
                     )
                 with col_del:
-                    _confirm_key = f"confirm_del_{saved['id']}"
-                    if st.session_state.get(_confirm_key):
+                    _confirm_key = f"delete_confirm_{saved['id']}"
+                    _confirm_time_key = f"delete_confirm_time_{saved['id']}"
+                    _is_armed = st.session_state.get(_confirm_key)
+                    # Auto-disarm after 5 seconds
+                    if _is_armed and time.time() - st.session_state.get(_confirm_time_key, 0) > 5:
+                        st.session_state.pop(_confirm_key, None)
+                        st.session_state.pop(_confirm_time_key, None)
+                        _is_armed = False
+                    if _is_armed:
                         if st.button("✓", key=f"del_yes_{saved['id']}", use_container_width=True,
                                      help="Confirm remove"):
                             supabase.table('saved_spots').delete().eq('id', saved['id']).execute()
                             st.session_state.pop(_confirm_key, None)
+                            st.session_state.pop(_confirm_time_key, None)
+                            st.session_state.saved_spots_dirty = True
+                            st.session_state.pref_scores_dirty = True
                             st.toast(f"Removed {saved['spot_name']}")
                             st.rerun()
                     else:
                         if st.button("🗑", key=f"del_{saved['id']}", use_container_width=True,
                                      help="Remove from ledger"):
                             st.session_state[_confirm_key] = True
+                            st.session_state[_confirm_time_key] = time.time()
                             st.rerun()
                 with col_action:
                     if st.button("›", key=f"view_{saved['id']}", use_container_width=True,
                                  help=f"Open {saved['spot_name']}"):
                         _spot_modal(saved)
 
-                # Quick star rating row for all unrated spots
+                # Quick star rating for all unrated spots
                 if not _rating_val:
-                    st.markdown('<div data-testid="gw-qs-anchor" style="display:none;"></div>', unsafe_allow_html=True)
-                    _qs1, _qs2, _qs3, _qs4, _qs5, _ql = st.columns([0.5, 0.5, 0.5, 0.5, 0.5, 3])
-                    with _ql:
-                        st.caption("Rate:")
-                    for _si, _sc in zip([1, 2, 3, 4, 5], [_qs1, _qs2, _qs3, _qs4, _qs5]):
-                        with _sc:
-                            if st.button("★", key=f"qs_{saved['id']}_{_si}", use_container_width=False):
-                                supabase.table('saved_spots').update({'rating': _si}).eq('id', saved['id']).execute()
-                                if _si == 5:
-                                    award_points(st.session_state.user.id, "rating", POINTS['rate'] + POINTS['rate_perfect'], "5-star rating!")
-                                elif _si >= 4:
-                                    award_points(st.session_state.user.id, "rating", POINTS['rate'], "Rated a visit")
-                                if _si >= 4:
-                                    check_and_award_badges(st.session_state.user.id)
-                                st.toast(f"Rated {_si}⭐")
-                                st.session_state.pref_scores_dirty = True
-                                st.rerun()
+                    _fb = st.feedback("stars", key=f"rate_{saved['id']}")
+                    if _fb is not None:
+                        _stars = _fb + 1  # st.feedback returns 0-4; convert to 1-5
+                        supabase.table('saved_spots').update({'rating': _stars}).eq('id', saved['id']).execute()
+                        if _stars == 5:
+                            award_points(st.session_state.user.id, "rating", POINTS['rate'] + POINTS['rate_perfect'], "5-star rating!")
+                        elif _stars >= 4:
+                            award_points(st.session_state.user.id, "rating", POINTS['rate'], "Rated a visit")
+                        if _stars >= 4:
+                            check_and_award_badges(st.session_state.user.id)
+                        st.toast(f"Rated {_stars}⭐")
+                        st.session_state.pref_scores_dirty = True
+                        st.rerun()
