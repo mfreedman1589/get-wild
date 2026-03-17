@@ -459,6 +459,8 @@ if 'show_feedback_form' not in st.session_state: st.session_state.show_feedback_
 if 'mem_outdoor_vibe' not in st.session_state: st.session_state.mem_outdoor_vibe = None
 if 'show_outdoor_vibe' not in st.session_state: st.session_state.show_outdoor_vibe = False
 if 'pref_scores' not in st.session_state: st.session_state.pref_scores = None
+if 'pref_scores_cache' not in st.session_state: st.session_state.pref_scores_cache = None
+if 'pref_scores_dirty' not in st.session_state: st.session_state.pref_scores_dirty = True
 if 'show_keyword' not in st.session_state: st.session_state.show_keyword = False
 if 'referral_code' not in st.session_state:
     st.session_state.referral_code = st.query_params.get("ref", "")
@@ -569,6 +571,7 @@ def get_user_preference_scores(user_id):
         'restaurant', 'bar', 'place', 'spot', 'venue', 'local', 'great', 'good',
         'nice', 'new', 'food', 'dining', 'eat', 'drink', 'the', 'and', 'with',
         'american', 'italian', 'asian', 'modern', 'style',
+        'tour', 'tours', 'divine',
     }
     try:
         res = supabase.table('saved_spots').select('spot_name, category, rating, mode, user_notes, matched_tags, saved_at').eq('user_id', user_id).order('saved_at', desc=False).execute()
@@ -590,7 +593,7 @@ def get_user_preference_scores(user_id):
         # Dynamic threshold: grows with data volume
         if total_spots <= 5:
             _kw_threshold = 1
-        elif total_spots <= 15:
+        elif total_spots <= 30:
             _kw_threshold = 2
         else:
             _kw_threshold = 3
@@ -663,7 +666,8 @@ def get_user_preference_scores(user_id):
         top_keywords = sorted(kw_counts, key=kw_counts.get, reverse=True)
         top_keywords = [kw for kw in top_keywords if kw_counts[kw] >= _kw_threshold and kw not in _GENERIC_STOP]
         avoid_keywords = [kw for kw in sorted(avoid_kw_counts, key=avoid_kw_counts.get, reverse=True)
-                          if avoid_kw_counts[kw] >= _kw_threshold and kw not in _GENERIC_STOP]
+                          if avoid_kw_counts[kw] >= _kw_threshold and kw not in _GENERIC_STOP
+                          and avoid_kw_counts[kw] > kw_counts.get(kw, 0)]
 
         print(f"[WildDNA] top_keywords={top_keywords} avoid_keywords={avoid_keywords}")
 
@@ -1898,6 +1902,7 @@ def render_wild_idea_card(idea, location_input, user_id):
                 _pts = POINTS['first_save'] if _pre == 0 else POINTS['save']
                 award_points(user_id, "save", _pts, "First spot saved! 🎉" if _pre == 0 else "Saved a Wild Idea spot")
                 check_and_award_badges(user_id)
+                st.session_state.pref_scores_dirty = True
                 st.session_state.wild_idea_expanded = False
                 st.rerun()
         with col2:
@@ -1907,6 +1912,7 @@ def render_wild_idea_card(idea, location_input, user_id):
                 st.toast("💡 Wild Idea accepted! Go make a memory.")
                 award_points(user_id, "going", POINTS['wild_idea'], f"🎲 Wild Idea accepted! +{POINTS['wild_idea']} points")
                 check_and_award_badges(user_id)
+                st.session_state.pref_scores_dirty = True
                 st.session_state.wild_idea_expanded = False
                 st.rerun()
         with col3:
@@ -1914,6 +1920,7 @@ def render_wild_idea_card(idea, location_input, user_id):
                 st.toast("Got it — we'll skip places like this 👎")
                 save_spot_to_db(user_id, name, address, category, notes="rejected_wild_idea")
                 _dismiss_wild_idea(user_id)
+                st.session_state.pref_scores_dirty = True
                 st.rerun()
     st.markdown(
         '<p style="text-align:center;color:#9ca3af;font-size:0.78rem;margin-top:2px;">'
@@ -2662,6 +2669,7 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
                 _pts = POINTS['first_save'] if _pre == 0 else POINTS['save']
                 award_points(user_id, "save", _pts, "First spot saved! 🎉" if _pre == 0 else "Saved a spot")
                 check_and_award_badges(user_id)
+                st.session_state.pref_scores_dirty = True
         with col2:
             if st.button("✅ I'm Going", key=f"going_{index}_{spot['name']}", use_container_width=True, type="primary", help="Mark as chosen"):
                 save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'), notes="chosen", **_ctx)
@@ -2671,11 +2679,13 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
                 _gpts = POINTS['going_wild'] if mode == 'get_wild' else POINTS['going_top3']
                 award_points(user_id, "going", _gpts, "Chose an outing")
                 check_and_award_badges(user_id)
+                st.session_state.pref_scores_dirty = True
         with col3:
             if st.button("👎 Not for me", key=f"nope_{index}_{spot['name']}", use_container_width=True, help="Never suggest this again"):
                 st.toast("Got it — we'll skip places like this 👎")
                 save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'),
                                 rating=1, notes="Blacklisted via quick-button.", **_ctx)
+                st.session_state.pref_scores_dirty = True
 def fetch_alltrails_trails(lat, lng, radius_miles, difficulty=None):
     """Fetch trails from AllTrails API. Returns [] if key not configured."""
     if not ALLTRAILS_API_KEY:
@@ -2749,7 +2759,11 @@ async def gather_all_data(lat, lng, places_input, distance, target_date_str, use
     weather_task  = asyncio.to_thread(get_live_weather, lat, lng)
     excluded_task = asyncio.to_thread(get_excluded_spots, user_id)
     favorites_task = asyncio.to_thread(get_favorite_spots, user_id)
-    prefs_task    = asyncio.to_thread(get_user_preference_scores, user_id)
+    _ps_cached = st.session_state.get('pref_scores_cache')
+    if _ps_cached is not None and not st.session_state.get('pref_scores_dirty', True):
+        prefs_task = asyncio.to_thread(lambda: _ps_cached)
+    else:
+        prefs_task = asyncio.to_thread(get_user_preference_scores, user_id)
     if isinstance(places_input, tuple):
         places_task = asyncio.to_thread(fetch_tier_places, *places_input, lat, lng, distance)
     else:
@@ -2993,7 +3007,11 @@ else:
                             if user_profile.get('dietary_restrictions'): _prof_parts.append(user_profile['dietary_restrictions'])
                         _prof_summary = ", ".join(_prof_parts) if _prof_parts else "no specific preferences"
 
-                        _wi_pref_scores = get_user_preference_scores(st.session_state.user.id)
+                        _uid_wi = st.session_state.user.id
+                        if st.session_state.get('pref_scores_cache') is None or st.session_state.get('pref_scores_dirty'):
+                            st.session_state.pref_scores_cache = get_user_preference_scores(_uid_wi)
+                            st.session_state.pref_scores_dirty = False
+                        _wi_pref_scores = st.session_state.pref_scores_cache or {}
                         _wi_kws = tuple((_wi_pref_scores.get('top_keywords') or [])[:2]) if _wi_pref_scores else None
                         _wi_excl_dict = get_excluded_spots(st.session_state.user.id)
                         _wi_excluded = tuple(
@@ -3245,7 +3263,11 @@ else:
                         status_loader.error("Couldn't find that location.")
                     else:
                         target_date_str, relative_day = get_local_target_date(lat, lng, st.session_state.mem_day)
-                        pref_scores_pre = get_user_preference_scores(st.session_state.user.id)
+                        _uid_ps = st.session_state.user.id
+                        if st.session_state.get('pref_scores_cache') is None or st.session_state.get('pref_scores_dirty'):
+                            st.session_state.pref_scores_cache = get_user_preference_scores(_uid_ps)
+                            st.session_state.pref_scores_dirty = False
+                        pref_scores_pre = st.session_state.pref_scores_cache or {}
                         # get_wild uses a single semantic query; top_3 uses 3 parallel tier queries
                         _is_get_wild = (st.session_state.current_mode == "get_wild")
                         if _is_get_wild or st.session_state.filters_dict.get('specific', '').strip():
@@ -3270,6 +3292,8 @@ else:
                             nest_asyncio.apply()
                             weather_report, raw_places, live_events_data, db_excluded, user_favorites, pref_scores, trail_results = asyncio.run(_run_gather())
                         st.session_state.pref_scores = pref_scores
+                        if pref_scores:
+                            st.session_state.pref_scores_cache = pref_scores
                         # Merge trail results — add to tier1 if tiered, else append to flat list
                         if trail_results:
                             if isinstance(raw_places, dict):
@@ -3724,7 +3748,10 @@ else:
 
         # ── WILD DNA ────────────────────────────────────────────────────────
         st.subheader("🧬 Your Wild DNA")
-        _dna_scores    = get_user_preference_scores(_uid_p)
+        if st.session_state.get('pref_scores_cache') is None or st.session_state.get('pref_scores_dirty'):
+            st.session_state.pref_scores_cache = get_user_preference_scores(_uid_p)
+            st.session_state.pref_scores_dirty = False
+        _dna_scores    = st.session_state.pref_scores_cache or {}
         _dna_kws       = (_dna_scores.get('top_keywords') or [])[:6]
         _dna_avoid     = (_dna_scores.get('avoid_keywords') or [])[:4]
         _dna_total     = _dna_scores.get('total_spots') or 0
@@ -3891,6 +3918,7 @@ else:
                 award_points(_uid, "going", POINTS['going_top3'], "Chose an outing")
                 check_and_award_badges(_uid)
                 st.toast("✅ Let's go! Have an amazing time.")
+                st.session_state.pref_scores_dirty = True
                 st.rerun()
         else:
             st.success("Chosen ✓ — you went here!")
@@ -3918,12 +3946,14 @@ else:
                 if new_rating >= 4:
                     check_and_award_badges(_uid)
                 st.session_state.saved_spots_dirty = True
+                st.session_state.pref_scores_dirty = True
                 st.rerun()
 
         # Delete (outside form so it's always visible)
         if st.button("🗑️ Delete Spot", key=f"modal_del_{_sid}", help="Remove from your ledger permanently"):
             if delete_spot_from_db(_sid):
                 st.session_state.saved_spots_dirty = True
+                st.session_state.pref_scores_dirty = True
                 st.rerun()
 
     with tab_saved:
@@ -4061,4 +4091,5 @@ else:
                                 if _si >= 4:
                                     check_and_award_badges(st.session_state.user.id)
                                 st.toast(f"Rated {_si}⭐")
+                                st.session_state.pref_scores_dirty = True
                                 st.rerun()
