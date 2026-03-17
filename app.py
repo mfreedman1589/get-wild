@@ -1233,7 +1233,7 @@ def _run_places_query(text_query, lat, lng, radius_miles, page_size=8):
             "textQuery": text_query,
             "pageSize": page_size,
             "locationBias": {"circle": {"center": {"latitude": lat, "longitude": lng}, "radius": radius_meters}}
-        }, timeout=15)
+        }, timeout=8)
         if response.status_code == 200:
             return response.json().get('places', [])
     except:
@@ -2306,8 +2306,8 @@ Return JSON with a 'recommendations' array. Each item: name, tier_name, category
                     f"{json.dumps(safe_events_data) if isinstance(safe_events_data, list) else safe_events_data}"
                 )}
             ],
-            max_tokens=2500,
-            timeout=30
+            max_tokens=1000,
+            timeout=20
         )
     except Exception as e:
         if "timeout" in type(e).__name__.lower() or "timeout" in str(e).lower():
