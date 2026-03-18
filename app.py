@@ -3608,13 +3608,23 @@ else:
 
                     if not _deck:
                         st.info("Nothing quick nearby right now — try a different location or check back later 🌿")
-                    elif _idx >= len(_deck):
-                        # End of deck
+                    elif _idx >= len(_deck) and st.session_state.explore_mode == "⚡ Quick":
+                        # End of deck — only show in Quick mode
                         st.markdown(
                             '<div style="text-align:center;color:#52b788;font-size:1rem;'
                             'font-weight:600;padding:20px 0;">You\'ve seen this batch — ready for more? 🌿</div>',
                             unsafe_allow_html=True,
                         )
+                        st.markdown("""<style>
+#qk-load-more-btn button {
+    background: #ffffff !important;
+    color: #2d6a4f !important;
+    border: 1.5px solid #2d6a4f !important;
+    border-radius: 10px !important;
+    font-weight: 600 !important;
+    min-height: 48px !important;
+}
+</style><div id="qk-load-more-btn"></div>""", unsafe_allow_html=True)
                         if st.button("🔄 Load More", use_container_width=True, key="qk_load_more"):
                             _radius = st.session_state.get('mem_dist', 10)
                             with st.spinner("🌿 Finding more wild spots..."):
