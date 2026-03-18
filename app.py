@@ -3389,25 +3389,39 @@ else:
             st.write("---")
 
             # Mode toggle: Search vs Quick
-            st.markdown("""<style>
-div[data-testid="stHorizontalBlock"]:has(button[kind="primary"]) button[kind="primary"] {
-    background-color:#2d6a4f!important;color:white!important;border:none!important;
-}
-div[data-testid="stHorizontalBlock"]:has(button[kind="primary"]) button[kind="secondaryFormSubmit"],
-div[data-testid="stHorizontalBlock"]:has(button[kind="primary"]) button[kind="secondary"] {
-    background-color:white!important;color:#2d6a4f!important;
-    border:1.5px solid #2d6a4f!important;
-}
-</style>""", unsafe_allow_html=True)
+            # Bake active/inactive colors into CSS at render time — no specificity battle
+            _is_search = st.session_state.explore_mode == "🔍 Search"
+            st.markdown(f"""
+<style>
+#search-btn button {{
+  background: {"#2d6a4f" if _is_search else "#ffffff"} !important;
+  color: {"#ffffff" if _is_search else "#2d6a4f"} !important;
+  border: 1.5px solid #2d6a4f !important;
+  border-radius: 10px !important;
+  width: 100% !important;
+  min-height: 48px !important;
+  font-weight: {"700" if _is_search else "400"} !important;
+}}
+#quick-btn button {{
+  background: {"#ffffff" if _is_search else "#2d6a4f"} !important;
+  color: {"#2d6a4f" if _is_search else "#ffffff"} !important;
+  border: 1.5px solid #2d6a4f !important;
+  border-radius: 10px !important;
+  width: 100% !important;
+  min-height: 48px !important;
+  font-weight: {"400" if _is_search else "700"} !important;
+}}
+</style>
+<div id="search-btn"></div>
+""", unsafe_allow_html=True)
             _col_search, _col_quick = st.columns(2)
             with _col_search:
-                _search_type = "primary" if st.session_state.explore_mode == "🔍 Search" else "secondary"
-                if st.button("🔍 Search", type=_search_type, use_container_width=True, key="mode_btn_search"):
+                if st.button("🔍 Search", use_container_width=True, key="btn_search"):
                     st.session_state.explore_mode = "🔍 Search"
                     st.rerun()
+            st.markdown('<div id="quick-btn"></div>', unsafe_allow_html=True)
             with _col_quick:
-                _quick_type = "primary" if st.session_state.explore_mode == "⚡ Quick" else "secondary"
-                if st.button("⚡ Quick", type=_quick_type, use_container_width=True, key="mode_btn_quick"):
+                if st.button("⚡ Quick", use_container_width=True, key="btn_quick"):
                     st.session_state.explore_mode = "⚡ Quick"
                     st.rerun()
 
