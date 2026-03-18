@@ -1526,6 +1526,11 @@ _TM_CLASSIFICATION_MAP = {
     "outdoor concert": ("music",        "festival"),
 }
 
+_OUTDOOR_TM_SKIP = {
+    'hiking', 'trail', 'walk', 'hike', 'nature', 'park',
+    'outdoor', 'camping', 'kayak', 'canoe', 'bike', 'cycling', 'climbing',
+}
+
 def fetch_live_events(lat, lng, radius_miles, target_date_str, specific_keyword=""):
     try:
         target_date = datetime.strptime(target_date_str, "%A, %B %d, %Y").date()
@@ -1535,6 +1540,9 @@ def fetch_live_events(lat, lng, radius_miles, target_date_str, specific_keyword=
         end_dt   = f"{(target_date + timedelta(days=2)).isoformat()}T00:00:00Z"
 
         kw_lower = (specific_keyword or "").lower().strip()
+        # Skip Ticketmaster entirely for outdoor/nature keywords — no results expected
+        if kw_lower in _OUTDOOR_TM_SKIP:
+            return []
         classification, extra_keyword = _TM_CLASSIFICATION_MAP.get(kw_lower, (None, None))
 
         params = {
@@ -2328,7 +2336,11 @@ def get_ai_recommendations(places_data, live_events_data, weather_report, filter
     _use_trails = (
         bool(trail_candidates) and
         _vibe_for_trails == "Outside" and
-        (_food_for_trails in ("No Food Needed", "") or _spend_for_trails == "🆓 Free")
+        (
+            _ov_for_trails in ("Adventure", "Nature") or
+            _food_for_trails in ("No Food Needed", "") or
+            _spend_for_trails == "🆓 Free"
+        )
     )
     _trimmed_trails = []
     if _use_trails:
@@ -2840,7 +2852,7 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
     _cat_str = (spot.get('category', '') or '').lower()
     _is_trail = (
         bool(spot.get('trail_data')) or
-        spot.get('source') in ('overpass', 'alltrails') or
+        spot.get('source') in ('overpass', 'alltrails', 'places_trail') or
         any(kw in _cat_str for kw in ('trail', 'path', 'hiking', 'nature reserve'))
     )
     if _is_trail:
@@ -3194,7 +3206,7 @@ def fetch_alltrails_trails(lat, lng, radius_miles, difficulty=None):
 # ==========================================
 _TRAIL_KEYWORDS = {"hike", "trail", "bike", "nature", "outdoor", "walk"}
 
-async def gather_all_data(lat, lng, places_input, distance, target_date_str, user_id, specific_keyword="", vibe="", food="", mode=""):
+async def gather_all_data(lat, lng, places_input, distance, target_date_str, user_id, specific_keyword="", vibe="", food="", mode="", outdoor_vibe=""):
     """places_input: tuple of (t1q, t2q, t3q) for tier-based fetching, or str for single semantic query."""
     async def _events_with_timeout():
         try:
@@ -3207,14 +3219,28 @@ async def gather_all_data(lat, lng, places_input, distance, target_date_str, use
 
     _want_trails = (
         (vibe == "Outside" and food == "No Food Needed") or
+        outdoor_vibe in ("Adventure", "Nature") or
         any(kw in (specific_keyword or "").lower() for kw in _TRAIL_KEYWORDS)
     )
 
     async def _trails_task():
         if _want_trails:
-            at_res = await asyncio.to_thread(fetch_alltrails_trails, lat, lng, distance)
-            op_res = await asyncio.to_thread(fetch_trails_overpass, lat, lng, distance)
-            return at_res + op_res
+            # Run AllTrails and Overpass concurrently
+            at_res, op_res = await asyncio.gather(
+                asyncio.to_thread(fetch_alltrails_trails, lat, lng, distance),
+                asyncio.to_thread(fetch_trails_overpass, lat, lng, distance),
+            )
+            combined = (at_res or []) + (op_res or [])
+            # Places API fallback when outdoor vibe is Adventure/Nature and Overpass returned few results
+            if outdoor_vibe in ("Adventure", "Nature") and len(combined) < 3:
+                for _q in ["hiking trail nature park scenic walk", "nature trail outdoor recreation area"]:
+                    _extra = await asyncio.to_thread(_run_places_query, _q, lat, lng, distance, 5)
+                    for _p in (_extra or []):
+                        _p['source'] = 'places_trail'
+                        _p.setdefault('category', 'Hiking Trail')
+                    combined.extend(_extra or [])
+            print(f"[TRAILS] returned {len(combined)} trails (overpass={len(op_res or [])}, alltrails={len(at_res or [])})")
+            return combined
         return []
 
     weather_task  = asyncio.to_thread(get_live_weather, lat, lng)
@@ -3969,6 +3995,7 @@ else:
                                 vibe=st.session_state.filters_dict.get('vibe', ''),
                                 food=st.session_state.filters_dict.get('food', ''),
                                 mode=st.session_state.current_mode,
+                                outdoor_vibe=st.session_state.filters_dict.get('outdoor_vibe', ''),
                             )
                         try:
                             weather_report, raw_places, live_events_data, db_excluded, user_favorites, pref_scores, trail_results = asyncio.run(_run_gather())
