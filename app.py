@@ -3262,7 +3262,9 @@ else:
                     if st.session_state.mem_gps_active and st.session_state.mem_geo_data:
                         _wi_lat = st.session_state.mem_geo_data['latitude']
                         _wi_lng = st.session_state.mem_geo_data['longitude']
-                        _wi_loc = "your current location"
+                        # Use mem_loc if user typed one, else fall back to a generic label
+                        # (lat/lng are what matter for Places API; location_name is GPT context only)
+                        _wi_loc = st.session_state.mem_loc or "nearby"
                     elif st.session_state.mem_loc:
                         _wi_lat, _wi_lng = get_coordinates(st.session_state.mem_loc)
                         _wi_loc = st.session_state.mem_loc
@@ -3323,7 +3325,8 @@ else:
                             render_wild_idea_card(_idea, _wi_loc, st.session_state.user.id)
                         else:
                             # Generation failed — track retries per location
-                            _fail_loc_key = _wi_loc or str(_wi_lat)
+                            # Use coordinates as key so GPS location changes properly reset counter
+                            _fail_loc_key = f"{round(_wi_lat, 2)},{round(_wi_lng, 2)}" if _wi_lat else (_wi_loc or '')
                             if st.session_state.get('wild_idea_fail_loc') != _fail_loc_key:
                                 st.session_state.wild_idea_fail_count = 0
                             st.session_state.wild_idea_fail_count += 1
@@ -3372,6 +3375,16 @@ else:
             st.write("---")
 
             # Mode toggle: Search vs Quick
+            st.markdown("""<style>
+.gw-mode-toggle + div [data-testid*="stBaseButton-secondary"] button {
+    background:#ffffff!important;color:#2d6a4f!important;
+    border:1.5px solid #2d6a4f!important;
+}
+.gw-mode-toggle + div [data-testid*="stBaseButton-primary"] button {
+    background:#2d6a4f!important;color:#ffffff!important;
+    border:1.5px solid #2d6a4f!important;
+}
+</style><div class="gw-mode-toggle"></div>""", unsafe_allow_html=True)
             _col_search, _col_quick = st.columns(2)
             with _col_search:
                 _search_type = "primary" if st.session_state.explore_mode == "🔍 Search" else "secondary"
@@ -3592,7 +3605,7 @@ else:
                             f'margin-bottom:4px;">{_idx + 1} / {len(_deck)}</div>',
                             unsafe_allow_html=True,
                         )
-                        render_spot_card(_spot, _qk_loc, _uid_qk, _idx + 1, "get_wild")
+                        render_spot_card(_spot, _qk_loc, _uid_qk, _idx + 1, "quick")
 
                         _qk_col1, _qk_col2 = st.columns(2)
                         with _qk_col1:
