@@ -462,7 +462,7 @@ if 'wild_idea_cache' not in st.session_state: st.session_state.wild_idea_cache =
 if 'wild_idea_cache_key' not in st.session_state: st.session_state.wild_idea_cache_key = None
 if 'wild_idea_fail_count' not in st.session_state: st.session_state.wild_idea_fail_count = 0
 if 'wild_idea_fail_loc' not in st.session_state: st.session_state.wild_idea_fail_loc = ''
-if 'explore_mode' not in st.session_state: st.session_state.explore_mode = "search"
+if 'explore_mode' not in st.session_state: st.session_state.explore_mode = "🔍 Search"
 if 'quick_deck' not in st.session_state: st.session_state.quick_deck = []
 if 'quick_deck_index' not in st.session_state: st.session_state.quick_deck_index = 0
 if 'quick_deck_cache_key' not in st.session_state: st.session_state.quick_deck_cache_key = None
@@ -2201,7 +2201,7 @@ def render_wild_idea_card(idea, location_input, user_id):
                 # Step B: toast
                 st.toast("Let's find something better ⚡")
                 # Step C: switch to Quick mode
-                st.session_state.explore_mode = "quick"
+                st.session_state.explore_mode = "⚡ Quick"
                 # Step D: clear wild idea state
                 st.session_state.wild_idea_expanded = False
                 st.session_state.wild_idea_dismissed = True
@@ -3104,7 +3104,7 @@ out body center;"""
         resp = requests.post(
             "https://overpass-api.de/api/interpreter",
             data={"data": query},
-            timeout=8,
+            timeout=6,
         )
         if resp.status_code != 200:
             return []
@@ -3255,7 +3255,12 @@ async def gather_all_data(lat, lng, places_input, distance, target_date_str, use
         places_task = asyncio.to_thread(fetch_tier_places, *places_input, lat, lng, distance)
     else:
         places_task = asyncio.to_thread(fetch_places_semantic, places_input, lat, lng, distance, vibe, food)
-    return await asyncio.gather(weather_task, places_task, _events_with_timeout(), excluded_task, favorites_task, prefs_task, _trails_task())
+    async def _trails_with_timeout():
+        try:
+            return await asyncio.wait_for(_trails_task(), timeout=8.0)
+        except (asyncio.TimeoutError, Exception):
+            return []
+    return await asyncio.gather(weather_task, places_task, _events_with_timeout(), excluded_task, favorites_task, prefs_task, _trails_with_timeout())
 
 # ==========================================
 # 6. UI ROUTING
@@ -3444,7 +3449,7 @@ else:
         if not st.session_state.search_active:
 
             # ---- HERE'S A WILD IDEA BANNER ----
-            if _should_show_wild_idea_teaser() and st.session_state.explore_mode == "search":
+            if _should_show_wild_idea_teaser() and st.session_state.explore_mode == "🔍 Search":
                 _has_location = (
                     st.session_state.get('mem_lat') is not None or
                     bool(st.session_state.get('mem_loc', '').strip())
@@ -3612,24 +3617,42 @@ else:
             st.write("---")
 
             # Mode toggle: Search vs Quick
-            _MODE_OPTS = ["🔍 Search", "⚡ Quick"]
-            _MODE_TO_KEY = {"🔍 Search": "search", "⚡ Quick": "quick"}
-            _KEY_TO_MODE = {v: k for k, v in _MODE_TO_KEY.items()}
-            _cur_mode_label = _KEY_TO_MODE.get(st.session_state.explore_mode, "🔍 Search")
-            if "seg_explore_mode" not in st.session_state or st.session_state.seg_explore_mode not in _MODE_OPTS:
-                st.session_state.seg_explore_mode = _cur_mode_label
-            try:
-                _mode_sel = st.segmented_control("Mode", _MODE_OPTS, key="seg_explore_mode", label_visibility="collapsed")
-                if _mode_sel is None:
-                    _mode_sel = _cur_mode_label
-            except AttributeError:
-                _mode_sel = st.radio("Mode", _MODE_OPTS, index=_MODE_OPTS.index(_cur_mode_label), horizontal=True, key="seg_explore_mode_r", label_visibility="collapsed")
-            _new_mode_key = _MODE_TO_KEY.get(_mode_sel, "search")
-            if _new_mode_key != st.session_state.explore_mode:
-                st.session_state.explore_mode = _new_mode_key
-                st.rerun()
+            _is_search = st.session_state.get('explore_mode', '🔍 Search') == '🔍 Search'
+            _search_bg    = '#2d6a4f' if _is_search else '#ffffff'
+            _search_color = '#ffffff' if _is_search else '#2d6a4f'
+            _quick_bg     = '#ffffff' if _is_search else '#2d6a4f'
+            _quick_color  = '#2d6a4f' if _is_search else '#ffffff'
+            st.markdown(f"""<style>
+#search-btn + div .stButton > button {{
+  background: {_search_bg} !important;
+  color: {_search_color} !important;
+  border: 1.5px solid #2d6a4f !important;
+  border-radius: 10px !important;
+  min-height: 48px !important;
+  width: 100% !important;
+}}
+#quick-btn + div .stButton > button {{
+  background: {_quick_bg} !important;
+  color: {_quick_color} !important;
+  border: 1.5px solid #2d6a4f !important;
+  border-radius: 10px !important;
+  min-height: 48px !important;
+  width: 100% !important;
+}}
+</style>
+<div id="search-btn"></div>""", unsafe_allow_html=True)
+            col_search, col_quick = st.columns(2)
+            with col_search:
+                if st.button("🔍 Search", use_container_width=True, key="btn_search"):
+                    st.session_state.explore_mode = "🔍 Search"
+                    st.rerun()
+            st.markdown('<div id="quick-btn"></div>', unsafe_allow_html=True)
+            with col_quick:
+                if st.button("⚡ Quick", use_container_width=True, key="btn_quick"):
+                    st.session_state.explore_mode = "⚡ Quick"
+                    st.rerun()
 
-            if st.session_state.explore_mode == "search":
+            if st.session_state.explore_mode == "🔍 Search":
                 # Option mappings: display ↔ internal value
                 _GROUP_OPTS  = ["💑 Date", "👨‍👩‍👧 Family", "👯 Friends", "🙋 Solo"]
                 _GROUP_TO_INT = {"💑 Date": "Date", "👨‍👩‍👧 Family": "Family Outing", "👯 Friends": "Friends", "🙋 Solo": "Solo"}
@@ -3812,7 +3835,7 @@ else:
 
                     if not _deck:
                         st.info("Nothing quick nearby right now — try a different location or check back later 🌿")
-                    elif _idx >= len(_deck) and st.session_state.explore_mode == "quick":
+                    elif _idx >= len(_deck) and st.session_state.explore_mode == "⚡ Quick":
                         # End of deck — only show in Quick mode
                         st.markdown(
                             '<div style="text-align:center;color:#52b788;font-size:1rem;'
