@@ -2857,6 +2857,8 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
     )
     with st.container(border=True):
         st.markdown(html_card, unsafe_allow_html=True)
+        if mode == "quick":
+            return  # Skip/Save buttons are rendered by the Quick deck UI
         col1, col2, col3 = st.columns(3)
         _raw_mt = spot.get('matched_tags') or []
         if isinstance(_raw_mt, list):
@@ -3328,17 +3330,17 @@ else:
             st.write("---")
 
             # Mode toggle: Search vs Quick
-            try:
-                _em = st.segmented_control(
-                    "", ["🔍 Search", "⚡ Quick"],
-                    default=st.session_state.explore_mode,
-                    key="explore_mode_ctrl",
-                    label_visibility="collapsed",
-                )
-                if _em is not None:
-                    st.session_state.explore_mode = _em
-            except AttributeError:
-                pass
+            _col_search, _col_quick = st.columns(2)
+            with _col_search:
+                _search_type = "primary" if st.session_state.explore_mode == "🔍 Search" else "secondary"
+                if st.button("🔍 Search", type=_search_type, use_container_width=True, key="mode_btn_search"):
+                    st.session_state.explore_mode = "🔍 Search"
+                    st.rerun()
+            with _col_quick:
+                _quick_type = "primary" if st.session_state.explore_mode == "⚡ Quick" else "secondary"
+                if st.button("⚡ Quick", type=_quick_type, use_container_width=True, key="mode_btn_quick"):
+                    st.session_state.explore_mode = "⚡ Quick"
+                    st.rerun()
 
             if st.session_state.explore_mode == "🔍 Search":
                 # Option mappings: display ↔ internal value
@@ -3505,23 +3507,16 @@ else:
                     # Generate deck if stale or empty
                     if (st.session_state.quick_deck_cache_key != _qk_cache_key
                             or not st.session_state.quick_deck):
-                        _qk_placeholder = st.empty()
-                        _qk_placeholder.markdown(
-                            '<div style="background:#eaf5ef;border-left:3px solid #2d6a4f;'
-                            'color:#2d6a4f;border-radius:8px;padding:12px;font-weight:600;">'
-                            '⚡ Loading your Quick deck...</div>',
-                            unsafe_allow_html=True,
-                        )
                         _radius = st.session_state.get('mem_dist', 10)
-                        st.session_state.quick_deck = generate_quick_deck(
-                            _uid_qk, _qk_lat, _qk_lng, _qk_loc,
-                            radius_miles=_radius,
-                            skip_signals=st.session_state.quick_skip_signals or None,
-                            save_signals=st.session_state.quick_save_signals or None,
-                        )
+                        with st.spinner("⚡ Loading your Quick deck..."):
+                            st.session_state.quick_deck = generate_quick_deck(
+                                _uid_qk, _qk_lat, _qk_lng, _qk_loc,
+                                radius_miles=_radius,
+                                skip_signals=st.session_state.quick_skip_signals or None,
+                                save_signals=st.session_state.quick_save_signals or None,
+                            )
                         st.session_state.quick_deck_cache_key = _qk_cache_key
                         st.session_state.quick_deck_index = 0
-                        _qk_placeholder.empty()
 
                     _deck = st.session_state.quick_deck
                     _idx  = st.session_state.quick_deck_index
@@ -3532,17 +3527,18 @@ else:
                         # End of deck
                         st.markdown(
                             '<div style="text-align:center;color:#52b788;font-size:1rem;'
-                            'font-weight:600;padding:20px 0;">You\'ve seen everything nearby 🌿</div>',
+                            'font-weight:600;padding:20px 0;">You\'ve seen this batch — ready for more? 🌿</div>',
                             unsafe_allow_html=True,
                         )
                         if st.button("🔄 Load More", use_container_width=True, key="qk_load_more"):
                             _radius = st.session_state.get('mem_dist', 10)
-                            st.session_state.quick_deck = generate_quick_deck(
-                                _uid_qk, _qk_lat, _qk_lng, _qk_loc,
-                                radius_miles=_radius,
-                                skip_signals=st.session_state.quick_skip_signals or None,
-                                save_signals=st.session_state.quick_save_signals or None,
-                            )
+                            with st.spinner("🌿 Finding more wild spots..."):
+                                st.session_state.quick_deck = generate_quick_deck(
+                                    _uid_qk, _qk_lat, _qk_lng, _qk_loc,
+                                    radius_miles=_radius,
+                                    skip_signals=st.session_state.quick_skip_signals or None,
+                                    save_signals=st.session_state.quick_save_signals or None,
+                                )
                             st.session_state.quick_deck_cache_key = _qk_cache_key
                             st.session_state.quick_deck_index = 0
                             st.rerun()
