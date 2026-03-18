@@ -1371,6 +1371,14 @@ def build_tier_queries(filters_dict, profile=None, preference_scores=None):
     _gm = {"Date": "intimate romantic", "Family Outing": "family friendly kid-friendly",
            "Friends": "lively group social", "Solo": "solo-friendly"}.get(group, "")
 
+    # Adventure outdoor vibe: always inject hiking trail queries regardless of food filter
+    if outdoor_vibe == "Adventure" and vibe == "Outside":
+        return (
+            f"scenic park hiking trail nature trail outdoor recreation {_gm}".strip(),
+            f"hidden hiking trail nature path outdoor adventure {_gm}".strip(),
+            f"secret trail backcountry off the beaten path outdoor adventure {_gm}".strip(),
+        )
+
     # Specific keyword: all 3 tiers target it, differentiated by quality signal
     if specific:
         return (
@@ -1672,8 +1680,14 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
         elif 17 <= h < 21:    time_context = "evening"
         else:                 time_context = "late night"
 
-        # Build Places query — personalized by top preference keyword if available
-        kw_prefix = f"unique {pref_keywords[0]}" if pref_keywords else "unique hidden"
+        # Build Places query — use adventure prefix when outdoor_vibe is Adventure
+        _wi_outdoor_vibe = (filters or {}).get('outdoor_vibe', '')
+        if _wi_outdoor_vibe == "Adventure":
+            kw_prefix = "hiking trail adventure outdoor"
+        elif pref_keywords:
+            kw_prefix = f"unique {pref_keywords[0]}"
+        else:
+            kw_prefix = "unique hidden"
         places_query = f"{kw_prefix} local experience {location_name}"
 
         # Fetch real Places results
@@ -1698,25 +1712,6 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
         if not raw_places:
             return None
 
-        # Fetch Overpass trails when outdoor adventure filters suggest it
-        _wi_setting = (filters or {}).get('setting', '')
-        _wi_food = (filters or {}).get('food', '')
-        _wi_budget = (filters or {}).get('budget', '')
-        _wi_want_trails = (
-            _wi_setting == "Outside" and
-            (_wi_food in ("No Food Needed", "", "Any") or _wi_budget in ("Free", "🆓 Free"))
-        )
-        trail_places = []
-        if _wi_want_trails:
-            try:
-                _op_trails = fetch_trails_overpass(lat, lng, radius_miles)
-                for _t in (_op_trails or []):
-                    _tname = (_t.get('displayName', {}).get('text') or '').lower()
-                    if _tname and _tname not in _excl_lower:
-                        trail_places.append(_t)
-            except Exception:
-                pass
-
         # Build a slim candidate list for GPT (name + category hint only)
         candidates = []
         for p in raw_places[:5]:
@@ -1725,17 +1720,6 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
                 "summary":     (p.get('editorialSummary', {}).get('text') or ''),
                 "address":     (p.get('formattedAddress') or ''),
                 "day_pattern": _get_venue_day_pattern(p.get('regularOpeningHours')),
-            })
-        for _t in trail_places[:3]:
-            _td = _t.get('trail_data', {})
-            candidates.append({
-                "name":        (_t.get('displayName', {}).get('text') or ''),
-                "summary":     (_t.get('editorialSummary', {}).get('text') or ''),
-                "address":     (_t.get('formattedAddress') or ''),
-                "category":    "Hiking Trail",
-                "difficulty":  _td.get('difficulty', ''),
-                "length_km":   _td.get('length_km', ''),
-                "source":      "overpass",
             })
 
         # Ask GPT to pick the most surprising option from real data
@@ -1771,7 +1755,7 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
                 "Each venue may have a day_pattern field: 'weekend_only', 'weekday_staple', 'evenings_only', 'all_day', or null. "
                 "Deprioritize 'weekend_only' venues for weekday outings; prefer 'evenings_only' or 'all_day' for evening searches. "
                 "When the schedule is relevant, mention the fit naturally in why_now. "
-                "Some candidates may have source=overpass and category=Hiking Trail — these are real local trails. "
+                "Some candidates may have category=Hiking Trail — these are real local trail venues. "
                 "If you pick a trail, set category to 'Hiking Trail', emoji to '🥾', and make why_now reference trail conditions "
                 "(e.g. 'Perfect for a morning hike on a clear day'). "
                 f"Venues: {json.dumps(candidates)}. "
@@ -1788,11 +1772,10 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
         if not data.get('name') or not data.get('why_now'):
             return None
 
-        # Match chosen name back to real Places or trail data
+        # Match chosen name back to real Places data
         chosen_name = (data['name'] or '').lower().strip()
-        all_candidates = raw_places[:5] + trail_places[:3]
         matched = next(
-            (p for p in all_candidates
+            (p for p in raw_places[:5]
              if chosen_name in (p.get('displayName', {}).get('text') or '').lower()),
             raw_places[0]
         )
@@ -1803,10 +1786,6 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
         data['google_rating_count']  = matched.get('userRatingCount', 0)
         data['google_opening_hours'] = matched.get('currentOpeningHours')
         data['vibe_check'] = ''
-        # Carry trail_data if matched a trail candidate
-        if matched.get('trail_data'):
-            data['trail_data'] = matched['trail_data']
-            data['source'] = 'overpass'
 
         if not isinstance(data.get('matched_tags'), list):
             data['matched_tags'] = []
@@ -2533,7 +2512,10 @@ def get_ai_recommendations(places_data, live_events_data, weather_report, filter
                 "These are different — do not interchange them. "
                 "HARD RULE: EXCLUDE any indoor venues, arenas, stadiums, rec centers, gyms, "
                 "or events held inside buildings. Adventure = must be physically outdoors. "
-                "If a venue is ambiguous, exclude it."
+                "If a venue is ambiguous, exclude it. "
+                "ADVENTURE MANDATE: At least 1 of the 3 results MUST be a hiking trail, "
+                "nature trail, or trail system — not just a park or general outdoor venue. "
+                "Look for trail candidates in the data pool and prioritize them."
             )
         elif _ov == "Nature":
             outdoor_vibe_rule = (
@@ -2639,7 +2621,7 @@ RULES:
 10. {hours_rule}
 11. {hidden_gem_mandate}
 12. FRESHNESS BONUS: Any venue tagged just_opened=True in the input data is a priority pick for the TIER 3 (Hidden Gem) or TIER 2 (Fresh Take) recommendation — these are rare finds. Always include one if available.
-13. TRAIL DATA: Some results may be tagged source=alltrails or source=overpass. These are real verified trails with difficulty ratings and length. For outdoor/active searches, strongly consider including one trail as the Adventure or Hidden Gem tier pick.{trail_adventure_rule}
+13. TRAIL DATA: Some results may be tagged source=alltrails or have category=Hiking Trail. These are real verified trails. For outdoor/active searches, strongly consider including one trail as the Adventure or Hidden Gem tier pick.{trail_adventure_rule}
 {f"14. {outdoor_vibe_rule}" if outdoor_vibe_rule else ""}{specific_rule}
 15. {day_pattern_rule}
 
@@ -3089,74 +3071,6 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
                 save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'),
                                 rating=1, notes="Blacklisted via quick-button.", **_ctx)
                 st.session_state.pref_scores_dirty = True
-def fetch_trails_overpass(lat, lng, radius_miles=25):
-    """Fetch hiking trails from Overpass API. Returns [] silently on any error."""
-    try:
-        radius_m = int(radius_miles * 1609.34)
-        query = f"""[out:json][timeout:8];
-(
-  way["highway"="path"]["sac_scale"](around:{radius_m},{lat},{lng});
-  way["highway"="footway"]["trail_visibility"](around:{radius_m},{lat},{lng});
-  relation["route"="hiking"](around:{radius_m},{lat},{lng});
-  way["leisure"="nature_reserve"](around:{radius_m},{lat},{lng});
-);
-out body center;"""
-        resp = requests.post(
-            "https://overpass-api.de/api/interpreter",
-            data={"data": query},
-            timeout=6,
-        )
-        if resp.status_code != 200:
-            return []
-        elements = resp.json().get("elements", [])
-        results = []
-        seen_names = set()
-        for el in elements:
-            tags = el.get("tags", {})
-            name = tags.get("name", "").strip()
-            if not name or not tags:
-                continue
-            if name.lower() in seen_names:
-                continue
-            seen_names.add(name.lower())
-            el_lat = el.get("center", {}).get("lat") or el.get("lat") or lat
-            el_lng = el.get("center", {}).get("lon") or el.get("lon") or lng
-            sac = tags.get("sac_scale", "")
-            surface = tags.get("surface", "")
-            nodes = el.get("nodes", [])
-            length_km = round(len(nodes) * 0.01, 1) if nodes else 0
-            difficulty = sac or tags.get("trail_visibility", "") or "hiking"
-            summary_parts = []
-            if difficulty and difficulty != "hiking":
-                summary_parts.append(difficulty.replace("_", " ").title())
-            if length_km:
-                summary_parts.append(f"{length_km:.1f} km")
-            if surface:
-                summary_parts.append(surface)
-            summary = ", ".join(summary_parts) if summary_parts else "Hiking trail"
-            results.append({
-                "displayName":      {"text": name},
-                "formattedAddress": f"{round(el_lat, 3)},{round(el_lng, 3)} area",
-                "rating":           None,
-                "userRatingCount":  0,
-                "editorialSummary": {"text": f"{summary} trail"},
-                "location":         {"latitude": el_lat, "longitude": el_lng},
-                "websiteUri":       None,
-                "photo_url":        None,
-                "source":           "overpass",
-                "category":         "Hiking Trail",
-                "trail_data": {
-                    "length_km":  length_km,
-                    "difficulty": difficulty,
-                    "surface":    surface,
-                },
-            })
-            if len(results) >= 10:
-                break
-        return results
-    except Exception:
-        return []
-
 def fetch_alltrails_trails(lat, lng, radius_miles, difficulty=None):
     """Fetch trails from AllTrails API. Returns [] if key not configured."""
     if not ALLTRAILS_API_KEY:
@@ -3204,9 +3118,7 @@ def fetch_alltrails_trails(lat, lng, radius_miles, difficulty=None):
 # ==========================================
 # 5. ASYNC DATA GATHERER
 # ==========================================
-_TRAIL_KEYWORDS = {"hike", "trail", "bike", "nature", "outdoor", "walk"}
-
-async def gather_all_data(lat, lng, places_input, distance, target_date_str, user_id, specific_keyword="", vibe="", food="", mode="", outdoor_vibe=""):
+async def gather_all_data(lat, lng, places_input, distance, target_date_str, user_id, specific_keyword="", vibe="", food="", mode=""):
     """places_input: tuple of (t1q, t2q, t3q) for tier-based fetching, or str for single semantic query."""
     async def _events_with_timeout():
         try:
@@ -3216,32 +3128,6 @@ async def gather_all_data(lat, lng, places_input, distance, target_date_str, use
             )
         except (asyncio.TimeoutError, Exception):
             return []
-
-    _want_trails = (
-        (vibe == "Outside" and food == "No Food Needed") or
-        outdoor_vibe in ("Adventure", "Nature") or
-        any(kw in (specific_keyword or "").lower() for kw in _TRAIL_KEYWORDS)
-    )
-
-    async def _trails_task():
-        if _want_trails:
-            # Run AllTrails and Overpass concurrently
-            at_res, op_res = await asyncio.gather(
-                asyncio.to_thread(fetch_alltrails_trails, lat, lng, distance),
-                asyncio.to_thread(fetch_trails_overpass, lat, lng, distance),
-            )
-            combined = (at_res or []) + (op_res or [])
-            # Places API fallback when outdoor vibe is Adventure/Nature and Overpass returned few results
-            if outdoor_vibe in ("Adventure", "Nature") and len(combined) < 3:
-                for _q in ["hiking trail nature park scenic walk", "nature trail outdoor recreation area"]:
-                    _extra = await asyncio.to_thread(_run_places_query, _q, lat, lng, distance, 5)
-                    for _p in (_extra or []):
-                        _p['source'] = 'places_trail'
-                        _p.setdefault('category', 'Hiking Trail')
-                    combined.extend(_extra or [])
-            print(f"[TRAILS] returned {len(combined)} trails (overpass={len(op_res or [])}, alltrails={len(at_res or [])})")
-            return combined
-        return []
 
     weather_task  = asyncio.to_thread(get_live_weather, lat, lng)
     excluded_task = asyncio.to_thread(get_excluded_spots, user_id)
@@ -3255,12 +3141,7 @@ async def gather_all_data(lat, lng, places_input, distance, target_date_str, use
         places_task = asyncio.to_thread(fetch_tier_places, *places_input, lat, lng, distance)
     else:
         places_task = asyncio.to_thread(fetch_places_semantic, places_input, lat, lng, distance, vibe, food)
-    async def _trails_with_timeout():
-        try:
-            return await asyncio.wait_for(_trails_task(), timeout=8.0)
-        except (asyncio.TimeoutError, Exception):
-            return []
-    return await asyncio.gather(weather_task, places_task, _events_with_timeout(), excluded_task, favorites_task, prefs_task, _trails_with_timeout())
+    return await asyncio.gather(weather_task, places_task, _events_with_timeout(), excluded_task, favorites_task, prefs_task)
 
 # ==========================================
 # 6. UI ROUTING
@@ -4018,19 +3899,16 @@ else:
                                 vibe=st.session_state.filters_dict.get('vibe', ''),
                                 food=st.session_state.filters_dict.get('food', ''),
                                 mode=st.session_state.current_mode,
-                                outdoor_vibe=st.session_state.filters_dict.get('outdoor_vibe', ''),
                             )
                         try:
-                            weather_report, raw_places, live_events_data, db_excluded, user_favorites, pref_scores, trail_results = asyncio.run(_run_gather())
+                            weather_report, raw_places, live_events_data, db_excluded, user_favorites, pref_scores = asyncio.run(_run_gather())
                         except RuntimeError:
                             import nest_asyncio
                             nest_asyncio.apply()
-                            weather_report, raw_places, live_events_data, db_excluded, user_favorites, pref_scores, trail_results = asyncio.run(_run_gather())
+                            weather_report, raw_places, live_events_data, db_excluded, user_favorites, pref_scores = asyncio.run(_run_gather())
                         st.session_state.pref_scores = pref_scores
                         if pref_scores:
                             st.session_state.pref_scores_cache = pref_scores
-                        # Trail results passed separately to get_ai_recommendations
-                        trail_candidates = trail_results or []
 
                         if st.session_state.current_mode == "get_wild":
                             status_loader.info("🎲 Loading up your adventure and revealing the spontaneity...")
@@ -4074,7 +3952,6 @@ else:
                                 lat=lat, lng=lng, radius_miles=st.session_state.mem_dist,
                                 preference_scores=pref_scores,
                                 resurfaceable_spots=_resurfaceable,
-                                trail_candidates=trail_candidates,
                             )
                             # Build combined photo map from all tiers (or flat list for get_wild)
                             _all_places = []
