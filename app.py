@@ -2125,10 +2125,52 @@ def render_wild_idea_card(idea, location_input, user_id):
                 st.rerun()
         with col3:
             if st.button("✕ Not for me", key=f"wi_nope_{_key}", use_container_width=True):
-                st.toast("Got it — we'll skip places like this 👎")
+                # Permanent rejection signal
                 save_spot_to_db(user_id, name, address, category, notes="rejected_wild_idea")
                 _dismiss_wild_idea(user_id)
                 st.session_state.pref_scores_dirty = True
+                # Step A: record category/vibe as soft skip signal for Quick mode
+                _skip_cat = (idea.get('category') or '').strip()
+                _skip_vibe = idea.get('vibe_check') or ''
+                if isinstance(_skip_vibe, list):
+                    _skip_vibe = ', '.join(_skip_vibe)
+                _skip_vibe = str(_skip_vibe).strip()
+                if _skip_cat:
+                    st.session_state.quick_skip_signals = (st.session_state.quick_skip_signals + [_skip_cat])[-20:]
+                if _skip_vibe:
+                    st.session_state.quick_skip_signals = (st.session_state.quick_skip_signals + [_skip_vibe])[-20:]
+                # Step B: toast
+                st.toast("Let's find something better ⚡")
+                # Step C: switch to Quick mode
+                st.session_state.explore_mode = "⚡ Quick"
+                # Step D: clear wild idea state
+                st.session_state.wild_idea_expanded = False
+                st.session_state.wild_idea_dismissed = True
+                # Step E: pre-generate deck so Quick mode renders instantly
+                _qk_lat, _qk_lng, _qk_loc = None, None, ""
+                if st.session_state.get('mem_gps_active') and st.session_state.get('mem_geo_data'):
+                    _qk_lat = st.session_state.mem_geo_data['latitude']
+                    _qk_lng = st.session_state.mem_geo_data['longitude']
+                    _qk_loc = "your current location"
+                elif st.session_state.get('mem_loc'):
+                    _qk_lat, _qk_lng = get_coordinates(st.session_state.mem_loc)
+                    _qk_loc = st.session_state.mem_loc
+                if _qk_lat:
+                    _qk_hour = datetime.now(timezone.utc).replace(tzinfo=None).hour
+                    _qk_cache_key = f"quick_{user_id}_{_qk_loc}_{_qk_hour}"
+                    if (st.session_state.get('quick_deck_cache_key') != _qk_cache_key
+                            or not st.session_state.get('quick_deck')):
+                        _radius = st.session_state.get('mem_dist', 10)
+                        with st.spinner("⚡ Shuffling the deck..."):
+                            st.session_state.quick_deck = generate_quick_deck(
+                                user_id, _qk_lat, _qk_lng, _qk_loc,
+                                radius_miles=_radius,
+                                skip_signals=st.session_state.quick_skip_signals or None,
+                                save_signals=st.session_state.quick_save_signals or None,
+                            )
+                        st.session_state.quick_deck_cache_key = _qk_cache_key
+                        st.session_state.quick_deck_index = 0
+                # Step F: rerun
                 st.rerun()
     st.markdown(
         '<p style="text-align:center;color:#9ca3af;font-size:0.78rem;margin-top:2px;">'
@@ -3180,7 +3222,7 @@ else:
         if not st.session_state.search_active:
 
             # ---- HERE'S A WILD IDEA BANNER ----
-            if _should_show_wild_idea_teaser():
+            if _should_show_wild_idea_teaser() and st.session_state.explore_mode == "🔍 Search":
                 _has_location = (
                     st.session_state.get('mem_lat') is not None or
                     bool(st.session_state.get('mem_loc', '').strip())
