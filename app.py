@@ -1689,6 +1689,25 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
         if not raw_places:
             return None
 
+        # Fetch Overpass trails when outdoor adventure filters suggest it
+        _wi_setting = (filters or {}).get('setting', '')
+        _wi_food = (filters or {}).get('food', '')
+        _wi_budget = (filters or {}).get('budget', '')
+        _wi_want_trails = (
+            _wi_setting == "Outside" and
+            (_wi_food in ("No Food Needed", "", "Any") or _wi_budget in ("Free", "🆓 Free"))
+        )
+        trail_places = []
+        if _wi_want_trails:
+            try:
+                _op_trails = fetch_trails_overpass(lat, lng, radius_miles)
+                for _t in (_op_trails or []):
+                    _tname = (_t.get('displayName', {}).get('text') or '').lower()
+                    if _tname and _tname not in _excl_lower:
+                        trail_places.append(_t)
+            except Exception:
+                pass
+
         # Build a slim candidate list for GPT (name + category hint only)
         candidates = []
         for p in raw_places[:5]:
@@ -1697,6 +1716,17 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
                 "summary":     (p.get('editorialSummary', {}).get('text') or ''),
                 "address":     (p.get('formattedAddress') or ''),
                 "day_pattern": _get_venue_day_pattern(p.get('regularOpeningHours')),
+            })
+        for _t in trail_places[:3]:
+            _td = _t.get('trail_data', {})
+            candidates.append({
+                "name":        (_t.get('displayName', {}).get('text') or ''),
+                "summary":     (_t.get('editorialSummary', {}).get('text') or ''),
+                "address":     (_t.get('formattedAddress') or ''),
+                "category":    "Hiking Trail",
+                "difficulty":  _td.get('difficulty', ''),
+                "length_km":   _td.get('length_km', ''),
+                "source":      "overpass",
             })
 
         # Ask GPT to pick the most surprising option from real data
@@ -1732,6 +1762,9 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
                 "Each venue may have a day_pattern field: 'weekend_only', 'weekday_staple', 'evenings_only', 'all_day', or null. "
                 "Deprioritize 'weekend_only' venues for weekday outings; prefer 'evenings_only' or 'all_day' for evening searches. "
                 "When the schedule is relevant, mention the fit naturally in why_now. "
+                "Some candidates may have source=overpass and category=Hiking Trail — these are real local trails. "
+                "If you pick a trail, set category to 'Hiking Trail', emoji to '🥾', and make why_now reference trail conditions "
+                "(e.g. 'Perfect for a morning hike on a clear day'). "
                 f"Venues: {json.dumps(candidates)}. "
                 "Return JSON: name (exact venue name from the list), "
                 "category (concise venue type, e.g. 'Escape Room', 'Jazz Club'), "
@@ -1746,10 +1779,11 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
         if not data.get('name') or not data.get('why_now'):
             return None
 
-        # Match chosen name back to real Places data for address, website, photo
+        # Match chosen name back to real Places or trail data
         chosen_name = (data['name'] or '').lower().strip()
+        all_candidates = raw_places[:5] + trail_places[:3]
         matched = next(
-            (p for p in raw_places[:5]
+            (p for p in all_candidates
              if chosen_name in (p.get('displayName', {}).get('text') or '').lower()),
             raw_places[0]
         )
@@ -1760,6 +1794,10 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
         data['google_rating_count']  = matched.get('userRatingCount', 0)
         data['google_opening_hours'] = matched.get('currentOpeningHours')
         data['vibe_check'] = ''
+        # Carry trail_data if matched a trail candidate
+        if matched.get('trail_data'):
+            data['trail_data'] = matched['trail_data']
+            data['source'] = 'overpass'
 
         if not isinstance(data.get('matched_tags'), list):
             data['matched_tags'] = []
@@ -2200,7 +2238,7 @@ def render_wild_idea_card(idea, location_input, user_id):
 # Eventbrite introduces a new discovery API.
 
 @retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3), retry=retry_if_not_exception_type(TimeoutError))
-def get_ai_recommendations(places_data, live_events_data, weather_report, filters_dict, location_name, target_date_str, relative_day, profile, excluded_spots, favorite_spots, mode="top_3", lat=None, lng=None, radius_miles=20, preference_scores=None, resurfaceable_spots=None):
+def get_ai_recommendations(places_data, live_events_data, weather_report, filters_dict, location_name, target_date_str, relative_day, profile, excluded_spots, favorite_spots, mode="top_3", lat=None, lng=None, radius_miles=20, preference_scores=None, resurfaceable_spots=None, trail_candidates=None):
     client = OpenAI(api_key=OPENAI_API_KEY)
 
     _spend_filter = filters_dict.get('spend', '💰 Moderate')
@@ -2280,6 +2318,53 @@ def get_ai_recommendations(places_data, live_events_data, weather_report, filter
     ) if excluded_spots else ""
 
     resurfaceable_context = ""  # resurfaceable spots treated as normal candidates
+
+    # Trail candidates — only injected when outdoor + no food/free budget
+    _vibe_for_trails = filters_dict.get('vibe', '')
+    _food_for_trails = filters_dict.get('food', '')
+    _spend_for_trails = filters_dict.get('spend', '')
+    _ov_for_trails = filters_dict.get('outdoor_vibe', '')
+    _use_trails = (
+        bool(trail_candidates) and
+        _vibe_for_trails == "Outside" and
+        (_food_for_trails in ("No Food Needed", "") or _spend_for_trails == "🆓 Free")
+    )
+    _trimmed_trails = []
+    if _use_trails:
+        _excl_lower_tr = {s.lower().strip() for s in (excluded_spots or [])}
+        for _t in (trail_candidates or []):
+            _tname = (_t.get('displayName', {}).get('text') or _t.get('name') or '').lower()
+            if not _tname or any(ex in _tname for ex in _excl_lower_tr):
+                continue
+            _trimmed_trails.append({
+                "name":        _t.get('displayName', {}).get('text') or _t.get('name', ''),
+                "address":     _t.get('formattedAddress') or _t.get('address', ''),
+                "summary":     (_t.get('editorialSummary', {}).get('text') or
+                               _t.get('description', '')),
+                "difficulty":  (_t.get('trail_data', {}).get('difficulty') or
+                               _t.get('difficulty', '')),
+                "length_km":   (_t.get('trail_data', {}).get('length_km') or
+                               _t.get('length_miles', '')),
+                "source":      _t.get('source', 'trail'),
+                "category":    "Hiking Trail",
+                "lat":         (_t.get('location', {}).get('latitude') or _t.get('lat')),
+                "lng":         (_t.get('location', {}).get('longitude') or _t.get('lng')),
+            })
+        _trimmed_trails = _trimmed_trails[:8]
+
+    if _ov_for_trails == "Adventure" and _trimmed_trails:
+        trail_adventure_rule = (
+            "\nTRAIL MANDATE: User selected 'Adventure' outdoor vibe. "
+            "At least 1 of the 3 recommendations MUST be a hiking trail or nature path from the TRAIL DATA section. "
+            "Trails are real, verified outdoor experiences — treat them as top-tier Adventure picks."
+        )
+    elif _ov_for_trails == "Nature" and _trimmed_trails:
+        trail_adventure_rule = (
+            "\nTRAIL PREFERENCE: User selected 'Nature' outdoor vibe. "
+            "Strongly prefer nature trails, scenic paths, and natural areas from the TRAIL DATA section over built venues."
+        )
+    else:
+        trail_adventure_rule = ""
 
     taste_context = ""
     if preference_scores and preference_scores.get('rated_count', 0) >= 2:
@@ -2541,7 +2626,7 @@ RULES:
 10. {hours_rule}
 11. {hidden_gem_mandate}
 12. FRESHNESS BONUS: Any venue tagged just_opened=True in the input data is a priority pick for the TIER 3 (Hidden Gem) or TIER 2 (Fresh Take) recommendation — these are rare finds. Always include one if available.
-13. TRAIL DATA: Some results may be tagged source=alltrails. These are real verified trails with difficulty ratings and length. For outdoor/active searches, strongly consider including one trail as the Adventure or Hidden Gem tier pick.
+13. TRAIL DATA: Some results may be tagged source=alltrails or source=overpass. These are real verified trails with difficulty ratings and length. For outdoor/active searches, strongly consider including one trail as the Adventure or Hidden Gem tier pick.{trail_adventure_rule}
 {f"14. {outdoor_vibe_rule}" if outdoor_vibe_rule else ""}{specific_rule}
 15. {day_pattern_rule}
 
@@ -2569,6 +2654,9 @@ Return JSON with a 'recommendations' array. Each item: name, tier_name, category
                 ) + (
                     f"=== EVENTS DATA (max 1 slot, only if food filter allows) ===\n"
                     f"{json.dumps(safe_events_data) if isinstance(safe_events_data, list) else safe_events_data}"
+                ) + (
+                    f"\n\n=== TRAIL DATA (hiking trails and nature paths — eligible for Adventure/Nature picks) ===\n{json.dumps(_trimmed_trails)}"
+                    if _trimmed_trails else ""
                 )}
             ],
             max_tokens=1000,
@@ -2747,7 +2835,17 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
         spot.get('tier_name', '') or '',
         spot.get('why_its_perfect', '') or '',
     ])
-    fallback_url = get_fallback_image(spot.get('category', ''), extra_text)
+    # Detect trail spots for special display
+    _cat_str = (spot.get('category', '') or '').lower()
+    _is_trail = (
+        bool(spot.get('trail_data')) or
+        spot.get('source') in ('overpass', 'alltrails') or
+        any(kw in _cat_str for kw in ('trail', 'path', 'hiking', 'nature reserve'))
+    )
+    if _is_trail:
+        fallback_url = get_fallback_image("hiking trail", "hiking trail nature outdoor")
+    else:
+        fallback_url = get_fallback_image(spot.get('category', ''), extra_text)
     img_url = spot.get('photo_url') or fallback_url
 
     # Tag pills
@@ -2765,12 +2863,13 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
                 continue
             tags_html += f'<span class="wc-tag">✓ {tag}</span>'
 
-    tier_name  = spot.get('tier_name', 'Top Pick')
+    tier_name  = "🥾 TRAIL" if _is_trail else spot.get('tier_name', 'Top Pick')
     # Sanitize: GPT sometimes returns "Tier 2" / "TIER 2" instead of the actual name
-    _tn_check = tier_name.lower().strip()
-    if _tn_check in ('tier 1', 'tier1'):    tier_name = 'The Sure Thing'
-    elif _tn_check in ('tier 2', 'tier2'): tier_name = 'The Fresh Take'
-    elif _tn_check in ('tier 3', 'tier3'): tier_name = 'The Hidden Gem'
+    if not _is_trail:
+        _tn_check = tier_name.lower().strip()
+        if _tn_check in ('tier 1', 'tier1'):    tier_name = 'The Sure Thing'
+        elif _tn_check in ('tier 2', 'tier2'): tier_name = 'The Fresh Take'
+        elif _tn_check in ('tier 3', 'tier3'): tier_name = 'The Hidden Gem'
     category   = spot.get('category', '')
     vibe       = spot.get('vibe_check', '')
     address    = spot.get('address', '')
@@ -2813,15 +2912,18 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
         )
 
     # Tier badge left-border color by pool membership
-    _tn = tier_name.lower()
-    if _tn in {"the sure thing", "the crowd pleaser", "the local favorite", "the classic", "the reliable"}:
-        _tier_color = "#52b788"
-    elif _tn in {"the fresh take", "the curveball", "the surprise", "the interesting pick", "the plot twist"}:
-        _tier_color = "#f4a261"
-    elif _tn in {"the hidden gem", "the wild card", "the adventure", "the deep cut", "the discovery"}:
-        _tier_color = "#e76f51"
+    if _is_trail:
+        _tier_color = "#40916c"  # trail green
     else:
-        _tier_color = "#2d6a4f"  # get_wild / Spontaneous Adventure
+        _tn = tier_name.lower()
+        if _tn in {"the sure thing", "the crowd pleaser", "the local favorite", "the classic", "the reliable"}:
+            _tier_color = "#52b788"
+        elif _tn in {"the fresh take", "the curveball", "the surprise", "the interesting pick", "the plot twist"}:
+            _tier_color = "#f4a261"
+        elif _tn in {"the hidden gem", "the wild card", "the adventure", "the deep cut", "the discovery"}:
+            _tier_color = "#e76f51"
+        else:
+            _tier_color = "#2d6a4f"  # get_wild / Spontaneous Adventure
 
     # Vibe check pills
     if isinstance(vibe, list):
@@ -2881,15 +2983,24 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
     _res_url = spot.get('reservations_url') or ''
     if not _res_url and _is_dining:
         _res_url = f"https://www.google.com/search?q={urllib.parse.quote(spot['name'] + ' reservations')}"
-    utility_html = (
-        f'<div class="wc-utility">'
-        f'{website_part}'
-        f'<a href="{map_url}" target="_blank" class="wc-util-link">🗺️ Directions</a>{sep}'
-        f'<a href="{uber_url}" target="_blank" class="wc-util-link">🚗 Uber</a>{sep}'
-        f'<a href="sms:?body={share_encoded}" class="wc-util-link">📱 Text</a>{sep}'
-        f'<a href="mailto:?subject={share_subj_enc}&body={share_body_enc}" class="wc-util-link">📧 Email</a>'
-        f'</div>'
-    )
+    if _is_trail:
+        utility_html = (
+            f'<div class="wc-utility">'
+            f'<a href="{map_url}" target="_blank" class="wc-util-link">🗺️ Directions</a>{sep}'
+            f'<a href="sms:?body={share_encoded}" class="wc-util-link">📱 Text</a>{sep}'
+            f'<a href="mailto:?subject={share_subj_enc}&body={share_body_enc}" class="wc-util-link">📧 Email</a>'
+            f'</div>'
+        )
+    else:
+        utility_html = (
+            f'<div class="wc-utility">'
+            f'{website_part}'
+            f'<a href="{map_url}" target="_blank" class="wc-util-link">🗺️ Directions</a>{sep}'
+            f'<a href="{uber_url}" target="_blank" class="wc-util-link">🚗 Uber</a>{sep}'
+            f'<a href="sms:?body={share_encoded}" class="wc-util-link">📱 Text</a>{sep}'
+            f'<a href="mailto:?subject={share_subj_enc}&body={share_body_enc}" class="wc-util-link">📧 Email</a>'
+            f'</div>'
+        )
 
     _card_class = "wc-shell wc-getwild" if mode == "get_wild" else "wc-shell"
     html_card = (
@@ -2965,6 +3076,74 @@ def render_spot_card(spot, location_input, user_id, index, mode, preference_scor
                 save_spot_to_db(user_id, spot['name'], spot['address'], spot.get('category', 'Top Pick'),
                                 rating=1, notes="Blacklisted via quick-button.", **_ctx)
                 st.session_state.pref_scores_dirty = True
+def fetch_trails_overpass(lat, lng, radius_miles=25):
+    """Fetch hiking trails from Overpass API. Returns [] silently on any error."""
+    try:
+        radius_m = int(radius_miles * 1609.34)
+        query = f"""[out:json][timeout:8];
+(
+  way["highway"="path"]["sac_scale"](around:{radius_m},{lat},{lng});
+  way["highway"="footway"]["trail_visibility"](around:{radius_m},{lat},{lng});
+  relation["route"="hiking"](around:{radius_m},{lat},{lng});
+  way["leisure"="nature_reserve"](around:{radius_m},{lat},{lng});
+);
+out body center;"""
+        resp = requests.post(
+            "https://overpass-api.de/api/interpreter",
+            data={"data": query},
+            timeout=8,
+        )
+        if resp.status_code != 200:
+            return []
+        elements = resp.json().get("elements", [])
+        results = []
+        seen_names = set()
+        for el in elements:
+            tags = el.get("tags", {})
+            name = tags.get("name", "").strip()
+            if not name or not tags:
+                continue
+            if name.lower() in seen_names:
+                continue
+            seen_names.add(name.lower())
+            el_lat = el.get("center", {}).get("lat") or el.get("lat") or lat
+            el_lng = el.get("center", {}).get("lon") or el.get("lon") or lng
+            sac = tags.get("sac_scale", "")
+            surface = tags.get("surface", "")
+            nodes = el.get("nodes", [])
+            length_km = round(len(nodes) * 0.01, 1) if nodes else 0
+            difficulty = sac or tags.get("trail_visibility", "") or "hiking"
+            summary_parts = []
+            if difficulty and difficulty != "hiking":
+                summary_parts.append(difficulty.replace("_", " ").title())
+            if length_km:
+                summary_parts.append(f"{length_km:.1f} km")
+            if surface:
+                summary_parts.append(surface)
+            summary = ", ".join(summary_parts) if summary_parts else "Hiking trail"
+            results.append({
+                "displayName":      {"text": name},
+                "formattedAddress": f"{round(el_lat, 3)},{round(el_lng, 3)} area",
+                "rating":           None,
+                "userRatingCount":  0,
+                "editorialSummary": {"text": f"{summary} trail"},
+                "location":         {"latitude": el_lat, "longitude": el_lng},
+                "websiteUri":       None,
+                "photo_url":        None,
+                "source":           "overpass",
+                "category":         "Hiking Trail",
+                "trail_data": {
+                    "length_km":  length_km,
+                    "difficulty": difficulty,
+                    "surface":    surface,
+                },
+            })
+            if len(results) >= 10:
+                break
+        return results
+    except Exception:
+        return []
+
 def fetch_alltrails_trails(lat, lng, radius_miles, difficulty=None):
     """Fetch trails from AllTrails API. Returns [] if key not configured."""
     if not ALLTRAILS_API_KEY:
@@ -3032,7 +3211,9 @@ async def gather_all_data(lat, lng, places_input, distance, target_date_str, use
 
     async def _trails_task():
         if _want_trails:
-            return await asyncio.to_thread(fetch_alltrails_trails, lat, lng, distance)
+            at_res = await asyncio.to_thread(fetch_alltrails_trails, lat, lng, distance)
+            op_res = await asyncio.to_thread(fetch_trails_overpass, lat, lng, distance)
+            return at_res + op_res
         return []
 
     weather_task  = asyncio.to_thread(get_live_weather, lat, lng)
@@ -3801,12 +3982,8 @@ else:
                         st.session_state.pref_scores = pref_scores
                         if pref_scores:
                             st.session_state.pref_scores_cache = pref_scores
-                        # Merge trail results — add to tier1 if tiered, else append to flat list
-                        if trail_results:
-                            if isinstance(raw_places, dict):
-                                raw_places['tier1'] = (raw_places.get('tier1') or []) + trail_results
-                            else:
-                                raw_places = (raw_places or []) + trail_results
+                        # Trail results passed separately to get_ai_recommendations
+                        trail_candidates = trail_results or []
 
                         if st.session_state.current_mode == "get_wild":
                             status_loader.info("🎲 Loading up your adventure and revealing the spontaneity...")
@@ -3850,6 +4027,7 @@ else:
                                 lat=lat, lng=lng, radius_miles=st.session_state.mem_dist,
                                 preference_scores=pref_scores,
                                 resurfaceable_spots=_resurfaceable,
+                                trail_candidates=trail_candidates,
                             )
                             # Build combined photo map from all tiers (or flat list for get_wild)
                             _all_places = []
