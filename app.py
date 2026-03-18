@@ -468,6 +468,7 @@ if 'quick_deck_index' not in st.session_state: st.session_state.quick_deck_index
 if 'quick_deck_cache_key' not in st.session_state: st.session_state.quick_deck_cache_key = None
 if 'quick_skip_signals' not in st.session_state: st.session_state.quick_skip_signals = []
 if 'quick_save_signals' not in st.session_state: st.session_state.quick_save_signals = []
+if 'quick_seen_names' not in st.session_state: st.session_state.quick_seen_names = set()
 if 'show_welcome_bonus' not in st.session_state: st.session_state.show_welcome_bonus = False
 if 'badges_backfilled' not in st.session_state: st.session_state.badges_backfilled = False
 if 'is_loading' not in st.session_state: st.session_state.is_loading = False
@@ -1772,7 +1773,7 @@ def get_wild_idea_uncached(user_id_str, lat, lng, location_name, profile_summary
         print(f"[WildIdea] error: {e}")
         return None
 
-def generate_quick_deck(user_id, lat, lng, location_name, radius_miles=10, skip_signals=None, save_signals=None):
+def generate_quick_deck(user_id, lat, lng, location_name, radius_miles=10, skip_signals=None, save_signals=None, excluded_names=None):
     """Returns list of up to 6 card-ready dicts for Quick mode, or empty list."""
     try:
         # Time context
@@ -1825,6 +1826,17 @@ def generate_quick_deck(user_id, lat, lng, location_name, radius_miles=10, skip_
                 ]
         except:
             pass
+
+        if not raw_places:
+            return []
+
+        # Filter out cards already seen this session
+        if excluded_names:
+            _excl_seen = {n.lower() for n in excluded_names}
+            raw_places = [
+                p for p in raw_places
+                if (p.get('displayName', {}).get('text') or '').lower() not in _excl_seen
+            ]
 
         if not raw_places:
             return []
@@ -2161,12 +2173,14 @@ def render_wild_idea_card(idea, location_input, user_id):
                     if (st.session_state.get('quick_deck_cache_key') != _qk_cache_key
                             or not st.session_state.get('quick_deck')):
                         _radius = st.session_state.get('mem_dist', 10)
+                        st.session_state.quick_seen_names = set()  # fresh deck
                         with st.spinner("⚡ Shuffling the deck..."):
                             st.session_state.quick_deck = generate_quick_deck(
                                 user_id, _qk_lat, _qk_lng, _qk_loc,
                                 radius_miles=_radius,
                                 skip_signals=st.session_state.quick_skip_signals or None,
                                 save_signals=st.session_state.quick_save_signals or None,
+                                excluded_names=None,
                             )
                         st.session_state.quick_deck_cache_key = _qk_cache_key
                         st.session_state.quick_deck_index = 0
@@ -3376,15 +3390,15 @@ else:
 
             # Mode toggle: Search vs Quick
             st.markdown("""<style>
-.gw-mode-toggle + div [data-testid*="stBaseButton-secondary"] button {
-    background:#ffffff!important;color:#2d6a4f!important;
+div[data-testid="stHorizontalBlock"]:has(button[kind="primary"]) button[kind="primary"] {
+    background-color:#2d6a4f!important;color:white!important;border:none!important;
+}
+div[data-testid="stHorizontalBlock"]:has(button[kind="primary"]) button[kind="secondaryFormSubmit"],
+div[data-testid="stHorizontalBlock"]:has(button[kind="primary"]) button[kind="secondary"] {
+    background-color:white!important;color:#2d6a4f!important;
     border:1.5px solid #2d6a4f!important;
 }
-.gw-mode-toggle + div [data-testid*="stBaseButton-primary"] button {
-    background:#2d6a4f!important;color:#ffffff!important;
-    border:1.5px solid #2d6a4f!important;
-}
-</style><div class="gw-mode-toggle"></div>""", unsafe_allow_html=True)
+</style>""", unsafe_allow_html=True)
             _col_search, _col_quick = st.columns(2)
             with _col_search:
                 _search_type = "primary" if st.session_state.explore_mode == "🔍 Search" else "secondary"
@@ -3563,12 +3577,14 @@ else:
                     if (st.session_state.quick_deck_cache_key != _qk_cache_key
                             or not st.session_state.quick_deck):
                         _radius = st.session_state.get('mem_dist', 10)
+                        st.session_state.quick_seen_names = set()  # reset on fresh deck
                         with st.spinner("⚡ Loading your Quick deck..."):
                             st.session_state.quick_deck = generate_quick_deck(
                                 _uid_qk, _qk_lat, _qk_lng, _qk_loc,
                                 radius_miles=_radius,
                                 skip_signals=st.session_state.quick_skip_signals or None,
                                 save_signals=st.session_state.quick_save_signals or None,
+                                excluded_names=None,  # fresh deck, no exclusions yet
                             )
                         st.session_state.quick_deck_cache_key = _qk_cache_key
                         st.session_state.quick_deck_index = 0
@@ -3593,6 +3609,7 @@ else:
                                     radius_miles=_radius,
                                     skip_signals=st.session_state.quick_skip_signals or None,
                                     save_signals=st.session_state.quick_save_signals or None,
+                                    excluded_names=st.session_state.quick_seen_names or None,
                                 )
                             st.session_state.quick_deck_cache_key = _qk_cache_key
                             st.session_state.quick_deck_index = 0
@@ -3600,6 +3617,10 @@ else:
                     else:
                         # Show current card
                         _spot = _deck[_idx]
+                        # Track seen name for Load More deduplication
+                        _spot_name = _spot.get('name', '')
+                        if _spot_name:
+                            st.session_state.quick_seen_names = st.session_state.quick_seen_names | {_spot_name.lower()}
                         st.markdown(
                             f'<div style="color:#9ca3af;font-size:0.78rem;text-align:right;'
                             f'margin-bottom:4px;">{_idx + 1} / {len(_deck)}</div>',
@@ -3607,10 +3628,13 @@ else:
                         )
                         render_spot_card(_spot, _qk_loc, _uid_qk, _idx + 1, "quick")
 
+                        # Shared save context for both Save and I'm Going
+                        _qk_tags_str = ', '.join(_spot.get('matched_tags') or [])
+
                         _qk_col1, _qk_col2 = st.columns(2)
                         with _qk_col1:
                             if st.button("✕ Skip", use_container_width=True, key=f"qk_skip_{_idx}"):
-                                # Record soft skip signal
+                                # Session-state soft signal only — no DB write
                                 _skip_cat = (_spot.get('category') or '').strip()
                                 _skip_vibe = (_spot.get('vibe_check') or '').strip()
                                 if _skip_cat:
@@ -3636,15 +3660,11 @@ else:
                                     st.session_state.quick_save_signals = (
                                         st.session_state.quick_save_signals + [_save_vibe]
                                     )[-20:]
-                                # Save to DB
-                                _tags_str = ', '.join(_spot.get('matched_tags') or [])
                                 _pre = save_spot_to_db(
-                                    _uid_qk,
-                                    _spot.get('name', ''),
-                                    _spot.get('address', ''),
+                                    _uid_qk, _spot_name, _spot.get('address', ''),
                                     _spot.get('category', ''),
                                     tier_name=_spot.get('tier_name', ''),
-                                    matched_tags=_tags_str,
+                                    matched_tags=_qk_tags_str,
                                     photo_url=_spot.get('photo_url') or '',
                                     description=_spot.get('why_its_perfect', ''),
                                     website=_spot.get('website', ''),
@@ -3653,13 +3673,42 @@ else:
                                 if _pre == 0:
                                     award_points(_uid_qk, "save", POINTS['first_save'], "First save!")
                                 else:
-                                    award_points(_uid_qk, "save", POINTS['save'], f"Saved {_spot.get('name', '')}")
+                                    award_points(_uid_qk, "save", POINTS['save'], f"Saved {_spot_name}")
                                 check_and_award_badges(_uid_qk)
                                 st.session_state.saved_spots_dirty = True
                                 st.session_state.pref_scores_dirty = True
                                 st.session_state.quick_deck_index += 1
                                 st.toast("❤️ Saved! Check your Adventure Ledger")
                                 st.rerun()
+
+                        # I'm Going — full width second row
+                        if st.button("✅ I'm Going", type="primary", use_container_width=True, key=f"qk_going_{_idx}"):
+                            save_spot_to_db(
+                                _uid_qk, _spot_name, _spot.get('address', ''),
+                                _spot.get('category', ''),
+                                notes="chosen",
+                                tier_name=_spot.get('tier_name', ''),
+                                matched_tags=_qk_tags_str,
+                                photo_url=_spot.get('photo_url') or '',
+                                description=_spot.get('why_its_perfect', ''),
+                                website=_spot.get('website', ''),
+                                mode="quick",
+                            )
+                            update_streak(_uid_qk)
+                            award_points(_uid_qk, "going", POINTS['going_top3'], f"Chose an outing: {_spot_name}")
+                            check_and_award_badges(_uid_qk)
+                            _vc = get_visit_count(_uid_qk, _spot_name)
+                            if _vc == 3:
+                                st.toast(f"🌟 You're becoming a regular at {_spot_name}!")
+                                award_points(_uid_qk, 'milestone', 5, f"Regular at {_spot_name}")
+                            elif _vc == 5:
+                                st.toast(f"👑 Local Legend unlocked: {_spot_name}!")
+                                award_points(_uid_qk, 'milestone', 10, f"Local Legend: {_spot_name}")
+                            st.session_state.saved_spots_dirty = True
+                            st.session_state.pref_scores_dirty = True
+                            st.session_state.quick_deck_index += 1
+                            st.toast("✅ Let's go! Have an amazing time.")
+                            st.rerun()
 
         # --- SCREEN 2: THE RESULTS & LOADER ---
         else:
