@@ -484,6 +484,7 @@ if 'referral_code' not in st.session_state:
 
 # Persistent memory state variables
 if 'mem_loc' not in st.session_state: st.session_state.mem_loc = ""
+if 'loc_input_value' not in st.session_state: st.session_state.loc_input_value = ""
 if 'mem_day' not in st.session_state: st.session_state.mem_day = "☀️ Today"
 if 'mem_time' not in st.session_state: st.session_state.mem_time = "🌙 Night"
 if 'mem_group' not in st.session_state: st.session_state.mem_group = "Date"
@@ -3540,8 +3541,23 @@ else:
             st.subheader("Where are we going?")
             loc_col1, loc_col2 = st.columns([5, 1])
             
-            with loc_col1: 
-                ui_loc = st.text_input("Location", value=st.session_state.mem_loc, placeholder="Enter City or ZIP Code", label_visibility="collapsed")
+            with loc_col1:
+                def _on_location_change():
+                    val = st.session_state.loc_input_raw.strip()
+                    if val and val != st.session_state.get('mem_loc', ''):
+                        st.session_state.mem_loc = val
+                        coords = get_coordinates(val)
+                        if coords:
+                            st.session_state.mem_lat = coords[0]
+                            st.session_state.mem_lng = coords[1]
+                            st.session_state.mem_gps_active = False
+                ui_loc = st.text_input(
+                    "Location",
+                    placeholder="Enter City or ZIP Code",
+                    key="loc_input_raw",
+                    on_change=_on_location_change,
+                    label_visibility="collapsed",
+                )
             with loc_col2:
                 # Only render the component when GPS is not yet active.
                 # Once active, the component keeps firing componentValue updates
